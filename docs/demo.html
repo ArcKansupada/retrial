@@ -1,0 +1,920 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>retrial — demo reel</title>
+<meta name="description" content="Git for agent trajectories. Branch, diff, and bisect LLM agent runs — backed by real re-execution, not static logs.">
+<meta property="og:title" content="retrial — git for agent trajectories">
+<meta property="og:description" content="Change one fact at step N and re-run your real agent to see what it actually would have done.">
+<meta property="og:type" content="website">
+<style>
+  /* minimal reset — matches what the hosted build supplies */
+  *, *::before, *::after { box-sizing: border-box; }
+  body, h1, h2, h3, p, figure, blockquote, dl, dd { margin: 0; }
+  img, svg, video { max-width: 100%; }
+  button { font: inherit; }
+</style>
+<style>
+  :root {
+    /* ground — blue-biased near-black, not pure */
+    --ink:      #0B0E14;
+    --panel:    #121722;
+    --panel-2:  #171E2B;
+    --rule:     #232B3A;
+    --rule-hi:  #334054;
+
+    /* text — cool whites and a blue-grey neutral */
+    --paper:    #E6EBF2;
+    --dim:      #7C879B;
+    --dimmer:   #55607A;
+
+    /* the two lanes: recorded past vs. re-executed counterfactual */
+    --a:        #E0A458;
+    --a-soft:   rgba(224,164,88,.13);
+    --b:        #5CC8D7;
+    --b-soft:   rgba(92,200,215,.13);
+
+    /* semantic, kept out of the lane system */
+    --ok:       #46A758;
+    --fail:     #E5484D;
+
+    --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    --sans: "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  html { background: var(--ink); }
+
+  body {
+    background: var(--ink);
+    color: var(--paper);
+    font-family: var(--sans);
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 24px 20px 28px;
+    box-sizing: border-box;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── stage ────────────────────────────────────────────────── */
+
+  .stage {
+    width: min(100%, 1180px);
+    aspect-ratio: 16 / 9;
+    container-type: inline-size;
+    position: relative;
+    overflow: hidden;
+    background: var(--ink);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    box-shadow: 0 24px 70px -30px rgba(0,0,0,.9);
+  }
+
+  /* faint grid, the graph-paper of a trace */
+  .stage::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,.022) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255,255,255,.022) 1px, transparent 1px);
+    background-size: 44px 44px;
+    pointer-events: none;
+  }
+
+  /* ── scrubber rail ────────────────────────────────────────── */
+
+  .rail {
+    position: absolute;
+    inset: 0 0 auto 0;
+    z-index: 5;
+    display: flex;
+    gap: 2px;
+    padding: 0;
+    height: 3.6cqi;
+    align-items: stretch;
+    background: linear-gradient(to bottom, rgba(11,14,20,.92), rgba(11,14,20,0));
+  }
+
+  .seg {
+    flex: var(--flex, 1);
+    position: relative;
+    display: flex;
+    align-items: center;
+    padding-left: .9cqi;
+    overflow: hidden;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .seg .fill {
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 1px;
+    background: var(--b);
+    transform: scaleX(var(--p, 0));
+    transform-origin: left;
+  }
+
+  .seg .tag {
+    font-family: var(--sans);
+    font-size: 1.02cqi;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--dimmer);
+    transition: color .3s ease;
+  }
+
+  .seg.active .tag { color: var(--paper); }
+  .seg.done .tag   { color: var(--dim); }
+  .seg.done .fill  { background: var(--rule-hi); }
+
+  .clock {
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 3.6cqi;
+    display: flex;
+    align-items: center;
+    padding: 0 1.1cqi;
+    font-family: var(--mono);
+    font-size: 1.05cqi;
+    font-variant-numeric: tabular-nums;
+    color: var(--dimmer);
+    z-index: 6;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  /* ── scenes ───────────────────────────────────────────────── */
+
+  .scene {
+    position: absolute;
+    inset: 3.6cqi 0 0 0;
+    padding: 3.4cqi 4.6cqi 3.4cqi;
+    box-sizing: border-box;
+    display: none;
+    flex-direction: column;
+    z-index: 2;
+  }
+  .scene.live { display: flex; }
+
+  /* every animated element rides these two classes */
+  .r { opacity: 0; transform: translateY(9px); }
+  .r.in { opacity: 1; transform: none; transition: opacity .42s ease, transform .42s cubic-bezier(.2,.7,.3,1); }
+
+  .eyebrow {
+    font-size: 1.05cqi;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+
+  h1, h2 { margin: 0; font-weight: 500; }
+
+  .thesis {
+    font-family: var(--mono);
+    font-size: 3.5cqi;
+    line-height: 1.34;
+    letter-spacing: -.02em;
+    text-wrap: balance;
+  }
+  .thesis .fade { color: var(--dim); }
+  .thesis .hit  { color: var(--b); }
+
+  .wordmark {
+    font-family: var(--mono);
+    font-size: 7.6cqi;
+    letter-spacing: -.055em;
+    line-height: 1;
+  }
+  .wordmark .dot { color: var(--b); }
+
+  .tagline {
+    font-size: 1.85cqi;
+    color: var(--dim);
+    letter-spacing: -.01em;
+  }
+
+  .note {
+    font-size: 1.55cqi;
+    color: var(--dim);
+    line-height: 1.55;
+    max-width: 62ch;
+  }
+  .note b { color: var(--paper); font-weight: 600; }
+
+  .hr { height: 1px; background: var(--rule); }
+
+  /* ── panels, terminal, code ───────────────────────────────── */
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 1.7cqi 1.9cqi;
+    min-width: 0;
+  }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    gap: .8cqi;
+    font-size: 1.02cqi;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--dimmer);
+    margin-bottom: 1.3cqi;
+  }
+  .panel-head::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+
+  .term { font-family: var(--mono); font-size: 1.42cqi; line-height: 1.72; }
+  .term .prompt { color: var(--b); }
+  .term .out    { color: var(--dim); }
+  .term .win    { color: var(--ok); }
+  .term .lose   { color: var(--fail); }
+  .term .sha    { color: var(--a); }
+  .term .flag   { color: var(--dimmer); }
+  .term .str    { color: var(--paper); }
+
+  .caret::after {
+    content: "▍";
+    color: var(--b);
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .code { font-family: var(--mono); font-size: 1.34cqi; line-height: 1.78; white-space: pre; }
+  .code .kw  { color: #C792EA; }
+  .code .fn  { color: var(--b); }
+  .code .st  { color: var(--a); }
+  .code .cm  { color: var(--dimmer); }
+  .code .dec { color: var(--a); }
+
+  .mark {
+    background: var(--b-soft);
+    box-shadow: 0 0 0 1px rgba(92,200,215,.28);
+    border-radius: 2px;
+  }
+
+  /* ── layout helpers ───────────────────────────────────────── */
+
+  .cols { display: grid; gap: 2.2cqi; min-height: 0; }
+  .c-6-6 { grid-template-columns: 1fr 1fr; }
+  .c-5-7 { grid-template-columns: 5fr 7fr; }
+  .stack { display: flex; flex-direction: column; min-height: 0; }
+  .g-s  { gap: 1.1cqi; }
+  .g-m  { gap: 1.9cqi; }
+  .g-l  { gap: 3cqi; }
+  .push { margin-top: auto; }
+
+  /* ── step list ────────────────────────────────────────────── */
+
+  .steps { display: flex; flex-direction: column; font-family: var(--mono); font-size: 1.35cqi; }
+  .step {
+    display: grid;
+    grid-template-columns: 7ch 8ch 12ch 1fr;
+    gap: 1.4cqi;
+    padding: .5cqi 0;
+    border-bottom: 1px solid var(--rule);
+    align-items: baseline;
+  }
+  .step .s   { color: var(--a); }
+  .step .n   { color: var(--dimmer); }
+  .step .k   { color: var(--paper); }
+  .step .d   { color: var(--dim); }
+  .step.hot  { background: var(--a-soft); box-shadow: inset 2px 0 0 var(--a); padding-left: .8cqi; }
+
+  /* ── diff ─────────────────────────────────────────────────── */
+
+  .lane { display: flex; flex-direction: column; gap: .45cqi; }
+  .lane-head {
+    display: flex;
+    align-items: baseline;
+    gap: .9cqi;
+    font-family: var(--mono);
+    font-size: 1.25cqi;
+    padding-bottom: .7cqi;
+    border-bottom: 1px solid var(--rule);
+  }
+  .lane-head .badge {
+    font-size: 1.6cqi;
+    font-weight: 700;
+    letter-spacing: -.02em;
+  }
+  .lane-a .badge { color: var(--a); }
+  .lane-b .badge { color: var(--b); }
+  .lane-head .id { color: var(--dim); }
+
+  .row {
+    display: grid;
+    grid-template-columns: 1.6ch 9ch 1fr;
+    gap: .9cqi;
+    font-family: var(--mono);
+    font-size: 1.3cqi;
+    padding: .42cqi .7cqi;
+    border-radius: 2px;
+    align-items: baseline;
+  }
+  .lane-a .row { background: var(--a-soft); }
+  .lane-b .row { background: var(--b-soft); }
+  .row .sign { font-weight: 700; }
+  .lane-a .row .sign { color: var(--a); }
+  .lane-b .row .sign { color: var(--b); }
+  .row .sha  { color: var(--dim); }
+  .row .what { color: var(--paper); }
+  .row .tagz { color: var(--dimmer); font-size: .88em; }
+
+  .row.flash {
+    box-shadow: 0 0 0 1px var(--b), 0 0 26px -4px rgba(92,200,215,.55);
+    background: rgba(92,200,215,.22);
+  }
+  .row.flash .what { color: #fff; }
+
+  .answers { display: grid; grid-template-columns: 1fr 1fr; gap: 2.2cqi; }
+  .answer {
+    display: flex;
+    flex-direction: column;
+    gap: .7cqi;
+    padding-left: 1.2cqi;
+    font-family: var(--mono);
+    font-size: 1.5cqi;
+    line-height: 1.5;
+  }
+  .answer .who {
+    font-size: 1.02cqi;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    font-family: var(--sans);
+  }
+  .answer-a { border-left: 2px solid var(--a); }
+  .answer-b { border-left: 2px solid var(--b); }
+  .answer-a .who { color: var(--a); }
+  .answer-b .who { color: var(--b); }
+
+  .callout {
+    font-family: var(--sans);
+    font-size: 2.05cqi;
+    line-height: 1.4;
+    letter-spacing: -.015em;
+    text-wrap: balance;
+  }
+  .callout .em { color: var(--b); }
+  .callout code {
+    font-family: var(--mono);
+    font-size: .92em;
+    background: var(--b-soft);
+    padding: .06em .34em;
+    border-radius: 3px;
+  }
+
+  /* ── verbs grid ───────────────────────────────────────────── */
+
+  .verbs { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5cqi 2.6cqi; }
+  .verb { display: flex; flex-direction: column; gap: .35cqi; padding-left: 1.1cqi; border-left: 1px solid var(--rule-hi); }
+  .verb .v { font-family: var(--mono); font-size: 1.85cqi; color: var(--b); letter-spacing: -.02em; }
+  .verb .t { font-size: 1.35cqi; color: var(--dim); line-height: 1.45; }
+  .verb .t em { font-style: normal; color: var(--paper); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: .8cqi; }
+  .chip {
+    font-family: var(--mono);
+    font-size: 1.25cqi;
+    color: var(--dim);
+    border: 1px solid var(--rule-hi);
+    border-radius: 100px;
+    padding: .42cqi 1.1cqi;
+  }
+
+  .install {
+    font-family: var(--mono);
+    font-size: 3.6cqi;
+    letter-spacing: -.03em;
+  }
+  .install .prompt { color: var(--dimmer); }
+  .install .pkg { color: var(--b); }
+
+  /* ── branch graph ─────────────────────────────────────────── */
+
+  .graph { width: 100%; }
+  .graph .edge {
+    fill: none;
+    stroke-width: 1.6;
+    stroke-dasharray: var(--len, 400);
+    stroke-dashoffset: var(--len, 400);
+  }
+  .graph .in .edge, .graph .edge.in { stroke-dashoffset: 0; transition: stroke-dashoffset .55s ease; }
+  .graph .edge-a { stroke: var(--a); }
+  .graph .edge-b { stroke: var(--b); }
+  .graph .node   { stroke-width: 1.6; }
+  .graph .node-a { fill: var(--ink); stroke: var(--a); }
+  .graph .node-a.solid { fill: var(--a); }
+  .graph .node-b { fill: var(--b); stroke: var(--b); }
+  .graph .node-b.hollow { fill: var(--ink); stroke-dasharray: 2.4 2.4; }
+  .graph text {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    fill: var(--dim);
+  }
+  .graph .lab-a { fill: var(--a); }
+  .graph .lab-b { fill: var(--b); }
+  .graph .gnode { opacity: 0; }
+  .graph .gnode.in { opacity: 1; transition: opacity .3s ease; }
+
+  /* ── transport (outside the recorded frame) ───────────────── */
+
+  .transport {
+    width: min(100%, 1180px);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--dim);
+    transition: opacity .45s ease;
+  }
+  .transport.hushed { opacity: 0; pointer-events: none; }
+
+  .btn {
+    font: inherit;
+    font-family: var(--mono);
+    color: var(--paper);
+    background: var(--panel);
+    border: 1px solid var(--rule-hi);
+    border-radius: 4px;
+    padding: 7px 13px;
+    cursor: pointer;
+    transition: background .18s ease, border-color .18s ease;
+  }
+  .btn:hover { background: var(--panel-2); border-color: var(--dimmer); }
+  .btn:focus-visible { outline: 2px solid var(--b); outline-offset: 2px; }
+  .btn[aria-pressed="true"] { border-color: var(--b); color: var(--b); }
+
+  .hint { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .hint kbd {
+    font-family: var(--mono);
+    font-size: 11px;
+    border: 1px solid var(--rule-hi);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    padding: 1px 5px;
+    color: var(--paper);
+  }
+
+  /* ── embed mode (?embed or #embed) — fill the iframe, no chrome ─── */
+
+  body.embed { padding: 0; gap: 0; }
+  body.embed .transport { display: none; }
+  body.embed .stage {
+    width: min(100vw, calc(100vh * 16 / 9));
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .r, .r.in, .graph .edge, .graph .gnode { transition: none !important; }
+    .caret::after { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="stage" id="stage">
+  <div class="rail" id="rail"></div>
+  <div class="clock" id="clock">0:00</div>
+
+  <!-- ══ 0 · why ══════════════════════════════════════════════ -->
+  <section class="scene" data-dur="7000" data-tag="why">
+    <div class="stack g-l" style="justify-content:center;height:100%">
+      <div class="stack g-m">
+        <p class="thesis r" data-beat="220">Your log tells you what the agent <span class="fade">did</span>.</p>
+        <p class="thesis r" data-beat="1500">It cannot tell you what it <span class="hit">would have done</span>.</p>
+      </div>
+      <div class="hr r" data-beat="3400"></div>
+      <div class="stack g-s">
+        <h1 class="wordmark r" data-beat="3700">retrial<span class="dot">.</span></h1>
+        <p class="tagline r" data-beat="4300">Git for agent trajectories — branch, diff, and bisect real LLM runs.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 1 · record ═══════════════════════════════════════════ -->
+  <section class="scene" data-dur="10500" data-tag="record">
+    <div class="stack g-m" style="height:100%">
+      <p class="eyebrow r" data-beat="120">Step one — a decorator, not an export format</p>
+
+      <div class="cols c-5-7" style="flex:1;min-height:0">
+        <div class="panel stack g-s r" data-beat="400">
+          <div class="panel-head">your&nbsp;agent&nbsp;loop</div>
+          <div class="code"><span class="dec">@record</span>(session_name=<span class="st">"booking-agent"</span>)
+<span class="kw">def</span> <span class="fn">run_agent</span>(<span class="mark">messages</span>, tools=TOOLS,
+              call_model=call_model,
+              execute_tools=execute_tools):
+    <span class="kw">while True</span>:
+        r = call_model(messages, tools)
+        messages.append(assistant(r))
+        <span class="kw">if</span> r.stop_reason != <span class="st">"tool_use"</span>:
+            <span class="kw">return</span> r
+        messages.append(execute_tools(r))</div>
+          <p class="note r" data-beat="1600" style="font-size:1.3cqi">
+            One rule: <b>messages is a parameter</b>. That is what lets a fork
+            seed your loop with edited history and get genuine re-execution.
+          </p>
+        </div>
+
+        <div class="panel stack g-m r" data-beat="900">
+          <div class="panel-head">terminal</div>
+          <div class="term">
+            <div><span class="prompt">$</span> <span data-type="2200" data-cps="26">python examples/booking_agent.py</span></div>
+            <div class="r" data-beat="3700"><span class="win">Confirmed: AUS-SFO booked for $450, reference QX7R2M.</span></div>
+            <div class="r" data-beat="4000"><span class="out">Recorded session</span> <span class="sha">s_62efd45178</span></div>
+          </div>
+
+          <div class="steps">
+            <div class="step r" data-beat="4800"><span class="s">cac49ce</span><span class="n">step 0</span><span class="k">model_call</span><span class="d">450 tok → tool_use</span></div>
+            <div class="step r" data-beat="5100"><span class="s">18ec4c4</span><span class="n">step 1</span><span class="k">tool_call</span><span class="d">ran search_flight</span></div>
+            <div class="step r" data-beat="5400"><span class="s">6043087</span><span class="n">step 2</span><span class="k">model_call</span><span class="d">574 tok → tool_use</span></div>
+            <div class="step r" data-beat="5700"><span class="s">c7b0109</span><span class="n">step 3</span><span class="k">tool_call</span><span class="d">ran book_flight</span></div>
+            <div class="step r" data-beat="6000"><span class="s">cdd2dfa</span><span class="n">step 4</span><span class="k">model_call</span><span class="d">722 tok → end_turn</span></div>
+          </div>
+
+          <p class="note push r" data-beat="7000" style="font-size:1.3cqi">
+            No export step. Every step is content-hashed and addressable by
+            prefix — <b>like git</b>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 2 · fork ═════════════════════════════════════════════ -->
+  <section class="scene" data-dur="11000" data-tag="fork">
+    <div class="stack g-m" style="height:100%">
+      <p class="eyebrow r" data-beat="120">Step two — change one fact, re-enter the real loop</p>
+      <h2 class="thesis r" data-beat="350" style="font-size:2.5cqi">
+        The fare came back <span style="color:var(--a)">$450</span>.
+        What would it have done at <span class="hit">$1200</span>?
+      </h2>
+
+      <div class="cols c-5-7 g-l" style="flex:1;min-height:0;align-items:start">
+        <div class="stack g-m">
+          <div class="panel r" data-beat="1200">
+            <div class="panel-head">edit_price.json</div>
+            <div class="code" style="white-space:pre-wrap">{<span class="st">"op"</span>: <span class="st">"replace"</span>,
+ <span class="st">"path"</span>: <span class="st">"/output/0/content"</span>,
+ <span class="st">"value"</span>: <span class="st">"{\"flight_price\": 1200}"</span>}</div>
+          </div>
+
+          <div class="term r" data-beat="2200">
+            <div><span class="prompt">$</span> <span data-type="2600" data-cps="30">retrial fork 18ec4c4 --edit-file edit_price.json</span></div>
+            <div class="r" data-beat="5200"><span class="out">Forked into session</span> <span style="color:var(--b)">s_effeb4295f</span></div>
+          </div>
+        </div>
+
+        <div class="stack g-m">
+          <div class="panel r" data-beat="1500" style="padding-bottom:1cqi">
+            <div class="panel-head">session forest</div>
+            <svg class="graph" viewBox="0 0 500 168" role="img" aria-label="Branch graph: the original run and its fork diverging at step 1">
+              <path class="edge edge-a" style="--len:380" d="M70 46 H430" data-beat="1900"/>
+              <path class="edge edge-b" style="--len:170" d="M70 46 C 108 46, 122 122, 160 122 H430" data-beat="5400"/>
+
+              <g class="gnode" data-beat="1900"><circle class="node node-a solid" cx="70"  cy="46" r="5.5"/><text class="lab-a" x="70"  y="30" text-anchor="middle">cac49ce</text></g>
+              <g class="gnode" data-beat="2100"><circle class="node node-a solid" cx="160" cy="46" r="5.5"/><text class="lab-a" x="160" y="30" text-anchor="middle">18ec4c4</text></g>
+              <g class="gnode" data-beat="2250"><circle class="node node-a solid" cx="250" cy="46" r="5.5"/><text class="lab-a" x="250" y="30" text-anchor="middle">6043087</text></g>
+              <g class="gnode" data-beat="2400"><circle class="node node-a solid" cx="340" cy="46" r="5.5"/><text class="lab-a" x="340" y="30" text-anchor="middle">c7b0109</text></g>
+              <g class="gnode" data-beat="2550"><circle class="node node-a solid" cx="430" cy="46" r="5.5"/><text class="lab-a" x="430" y="30" text-anchor="middle">cdd2dfa</text></g>
+              <g class="gnode" data-beat="2750"><text x="430" y="64" text-anchor="end" fill="#55607A" font-size="8.5">A · s_62efd45178 · recorded</text></g>
+
+              <g class="gnode" data-beat="5600"><circle class="node node-b hollow" cx="160" cy="122" r="5.5"/><text class="lab-b" x="160" y="142" text-anchor="middle">18ec4c4*</text></g>
+              <g class="gnode" data-beat="5900"><circle class="node node-b" cx="250" cy="122" r="5.5"/><text class="lab-b" x="250" y="142" text-anchor="middle">d4bf0be</text></g>
+              <g class="gnode" data-beat="6150"><circle class="node node-b" cx="340" cy="122" r="5.5"/><text class="lab-b" x="340" y="142" text-anchor="middle">8e5fd93</text></g>
+              <g class="gnode" data-beat="6400"><circle class="node node-b" cx="430" cy="122" r="5.5"/><text class="lab-b" x="430" y="142" text-anchor="middle">65b09bf</text></g>
+              <g class="gnode" data-beat="6600"><text x="430" y="106" text-anchor="end" fill="#55607A" font-size="8.5">B · s_effeb4295f · re-executed live</text></g>
+            </svg>
+          </div>
+
+          <p class="callout r" data-beat="7400">
+            Not a relabeled log. retrial replays to <code>18ec4c4</code>, splices
+            in the new fare, and <span class="em">re-enters your loop</span> —
+            real model calls from there on.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 3 · diff ═════════════════════════════════════════════ -->
+  <section class="scene" data-dur="13000" data-tag="diff">
+    <div class="stack g-m" style="height:100%">
+      <div class="term r" data-beat="120" style="font-size:1.3cqi">
+        <span class="prompt">$</span> retrial diff <span class="sha">s_62efd45178</span> <span style="color:var(--b)">s_effeb4295f</span>
+      </div>
+
+      <div class="term r" data-beat="700" style="font-size:1.25cqi">
+        <span class="out">diverged at</span> <span class="sha">18ec4c4</span>
+        &nbsp;<span class="flag">cause:</span> <span class="str">replace /output/0/content = {"flight_price": 1200}</span>
+      </div>
+
+      <div class="cols c-6-6" style="flex:1;min-height:0;align-content:start">
+        <div class="lane lane-a">
+          <div class="lane-head r" data-beat="1100"><span class="badge">A</span><span class="id">what happened</span></div>
+          <div class="row r" data-beat="1400"><span class="sign">−</span><span class="sha">18ec4c4</span><span class="what">tool_call &nbsp;search_flight <span class="tagz">[live]</span></span></div>
+          <div class="row r" data-beat="1700"><span class="sign">−</span><span class="sha">6043087</span><span class="what">model_call <span class="tagz">→ tool_use</span></span></div>
+          <div class="row r" data-beat="2000"><span class="sign">−</span><span class="sha">c7b0109</span><span class="what">tool_call &nbsp;book_flight <span class="tagz">[live]</span></span></div>
+          <div class="row r" data-beat="2300"><span class="sign">−</span><span class="sha">cdd2dfa</span><span class="what">model_call <span class="tagz">→ end_turn</span></span></div>
+        </div>
+
+        <div class="lane lane-b">
+          <div class="lane-head r" data-beat="2800"><span class="badge">B</span><span class="id">what would have happened</span></div>
+          <div class="row r" data-beat="3100"><span class="sign">+</span><span class="sha">18ec4c4*</span><span class="what">tool_call &nbsp;search_flight <span class="tagz">[replayed]</span></span></div>
+          <div class="row r" data-beat="3400"><span class="sign">+</span><span class="sha">d4bf0be</span><span class="what">model_call <span class="tagz">→ tool_use</span></span></div>
+          <div class="row r" data-beat="3700" id="flashrow"><span class="sign">+</span><span class="sha">8e5fd93</span><span class="what">tool_call &nbsp;check_budget <span class="tagz">[live]</span></span></div>
+          <div class="row r" data-beat="4000"><span class="sign">+</span><span class="sha">65b09bf</span><span class="what">model_call <span class="tagz">→ end_turn</span></span></div>
+        </div>
+      </div>
+
+      <p class="callout r" data-beat="5200">
+        B called <code>check_budget</code> — <span class="em">a tool the original
+        run never touched</span>. Branching stored JSON can only ever replay
+        steps that already happened.
+      </p>
+
+      <div class="hr r" data-beat="7600"></div>
+
+      <div class="answers">
+        <div class="answer answer-a r" data-beat="7900">
+          <span class="who">A · final answer</span>
+          Confirmed: AUS-SFO booked for $450, reference QX7R2M.
+        </div>
+        <div class="answer answer-b r" data-beat="8600">
+          <span class="who">B · final answer</span>
+          That's over the $600 limit. I need approval before booking.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 4 · bisect ═══════════════════════════════════════════ -->
+  <section class="scene" data-dur="10000" data-tag="bisect">
+    <div class="stack g-m" style="height:100%">
+      <p class="eyebrow r" data-beat="120">Same machinery, pointed at a failure</p>
+      <h2 class="thesis r" data-beat="350" style="font-size:2.5cqi">
+        A run failed five steps ago. <span class="hit">Which step doomed it?</span>
+      </h2>
+
+      <div class="panel stack g-m r" data-beat="1100" style="flex:1;min-height:0">
+        <div class="term">
+          <div><span class="prompt">$</span> <span data-type="1500" data-cps="34">retrial bisect s_0abbad608c --check "output contains 'Confirmed'"</span></div>
+        </div>
+
+        <div class="term" style="font-size:1.38cqi">
+          <div class="r" data-beat="4200"><span class="out">probe step 2</span> <span class="sha">d157261</span> &nbsp;<span class="win">recovered</span> &nbsp;<span class="out">→ 'Confirmed: AUS-SFO booked for $450…'</span></div>
+          <div class="r" data-beat="5000"><span class="out">probe step 3</span> <span class="sha">3883e2a</span> &nbsp;<span class="lose">still broken</span> &nbsp;<span class="out">→ "I couldn't reach the airline to book that."</span></div>
+        </div>
+
+        <div class="hr r" data-beat="5800"></div>
+
+        <div class="stack g-s r" data-beat="6100">
+          <p class="callout" style="font-size:1.85cqi">
+            First step that could not recover: <code>3883e2a</code> — <span class="em">ran book_flight</span>
+          </p>
+          <p class="note">
+            <b>2 re-executions over 5 candidate steps.</b> Binary search over
+            resume points, each probe a real run of your agent, each one recorded
+            as its own session you can open.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 5 · ship ═════════════════════════════════════════════ -->
+  <section class="scene" data-dur="10500" data-tag="ship">
+    <div class="stack g-l" style="height:100%">
+      <div class="stack g-m">
+        <p class="eyebrow r" data-beat="120">Fork plus a check, aimed at four more questions</p>
+        <div class="verbs">
+          <div class="verb r" data-beat="400"><span class="v">ablate</span><span class="t">Which recorded facts did a <em>good</em> run actually need? Perturb each, watch the outcome flip.</span></div>
+          <div class="verb r" data-beat="700"><span class="v">sweep</span><span class="t">Fork one step across many values to find the real threshold in the model's behavior.</span></div>
+          <div class="verb r" data-beat="1000"><span class="v">rerun</span><span class="t">Re-execute every recorded run against today's code. Your traces are the regression suite.</span></div>
+          <div class="verb r" data-beat="1300"><span class="v">cost</span><span class="t">Tokens and dollars per step. An unknown model prices as <em>unpriced</em>, never as a guess.</span></div>
+        </div>
+      </div>
+
+      <div class="hr r" data-beat="2400"></div>
+
+      <div class="stack g-m push">
+        <p class="install r" data-beat="2800"><span class="prompt">$</span> pip install <span class="pkg">retrial</span></p>
+        <div class="chips">
+          <span class="chip r" data-beat="3400">real re-execution, not log branching</span>
+          <span class="chip r" data-beat="3700">any model — Anthropic, OpenAI, Gemini, local</span>
+          <span class="chip r" data-beat="4000">one SQLite file in .retrial/</span>
+          <span class="chip r" data-beat="4300">no account, no telemetry, no dashboard</span>
+        </div>
+        <p class="tagline r" data-beat="5000" style="font-size:1.6cqi">
+          A wrong replay would be worse than no replay — so retrial raises rather
+          than guesses when it cannot verify the replay is exactly what happened.
+        </p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="transport" id="transport">
+  <button class="btn" id="playBtn" aria-label="Play or pause">❚❚ Pause</button>
+  <button class="btn" id="prevBtn" aria-label="Previous scene">↞</button>
+  <button class="btn" id="nextBtn" aria-label="Next scene">↠</button>
+  <button class="btn" id="restartBtn" aria-label="Restart from the beginning">↺ Restart</button>
+  <button class="btn" id="speedBtn" aria-label="Playback speed">1×</button>
+  <button class="btn" id="cleanBtn" aria-pressed="false" aria-label="Toggle recording mode">Recording mode</button>
+  <span class="hint">Record the stage only · <kbd>space</kbd> <kbd>←</kbd> <kbd>→</kbd> <kbd>R</kbd> <kbd>H</kbd></span>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var stage   = document.getElementById("stage");
+  var railEl  = document.getElementById("rail");
+  var clockEl = document.getElementById("clock");
+  var scenes  = Array.prototype.slice.call(stage.querySelectorAll(".scene"));
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---- build the timeline from the markup ------------------------------ */
+  var timeline = scenes.map(function (el) {
+    var dur = parseInt(el.dataset.dur, 10);
+    var reveals = Array.prototype.slice.call(el.querySelectorAll("[data-beat]"))
+      .map(function (n) { return { el: n, at: parseInt(n.dataset.beat, 10) }; });
+    var typers = Array.prototype.slice.call(el.querySelectorAll("[data-type]"))
+      .map(function (n) {
+        n.dataset.full = n.dataset.full || n.textContent;
+        return { el: n, at: parseInt(n.dataset.type, 10), cps: parseFloat(n.dataset.cps || 30) };
+      });
+    return { el: el, dur: dur, reveals: reveals, typers: typers };
+  });
+
+  var TOTAL = timeline.reduce(function (a, s) { return a + s.dur; }, 0);
+  var starts = [];
+  timeline.reduce(function (acc, s, i) { starts[i] = acc; return acc + s.dur; }, 0);
+
+  /* ---- scrubber rail --------------------------------------------------- */
+  var segs = timeline.map(function (s) {
+    var seg = document.createElement("div");
+    seg.className = "seg";
+    seg.style.setProperty("--flex", String(s.dur));
+    seg.innerHTML = '<span class="fill"></span><span class="tag"></span>';
+    seg.querySelector(".tag").textContent = s.el.dataset.tag;
+    railEl.appendChild(seg);
+    return seg;
+  });
+
+  /* the diff scene's emphasis beat, handled by hand so it can pulse */
+  var flashRow = document.getElementById("flashrow");
+
+  /* ---- clock ----------------------------------------------------------- */
+  var t = 0;
+  var playing = !reduced;
+  var speed = 1;
+  var last = null;
+
+  function render(now) {
+    var i = 0;
+    while (i < timeline.length - 1 && now >= starts[i] + timeline[i].dur) i++;
+    var local = now - starts[i];
+
+    scenes.forEach(function (el, k) { el.classList.toggle("live", k === i); });
+
+    timeline.forEach(function (s, k) {
+      var active = k === i;
+      var lt = active ? local : (k < i ? s.dur : -1);
+
+      s.reveals.forEach(function (b) {
+        b.el.classList.toggle("in", lt >= b.at);
+      });
+
+      s.typers.forEach(function (b) {
+        var full = b.el.dataset.full;
+        if (lt < b.at) { b.el.textContent = ""; b.el.classList.remove("caret"); return; }
+        var chars = Math.floor(((lt - b.at) / 1000) * b.cps);
+        var shown = full.slice(0, Math.min(chars, full.length));
+        if (b.el.textContent !== shown) b.el.textContent = shown;
+        b.el.classList.toggle("caret", chars < full.length);
+      });
+    });
+
+    if (flashRow) {
+      var diffIdx = 3;
+      var on = i === diffIdx && local >= 4600 && local < 7400;
+      flashRow.classList.toggle("flash", on);
+    }
+
+    segs.forEach(function (seg, k) {
+      var p = k < i ? 1 : (k > i ? 0 : Math.min(1, local / timeline[k].dur));
+      seg.style.setProperty("--p", String(p));
+      seg.classList.toggle("active", k === i);
+      seg.classList.toggle("done", k < i);
+    });
+
+    var secs = Math.floor(now / 1000);
+    clockEl.textContent = Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0");
+  }
+
+  function frame(ts) {
+    if (last === null) last = ts;
+    var dt = ts - last;
+    last = ts;
+    if (playing) {
+      t += dt * speed;
+      if (t >= TOTAL) {
+        if (LOOP) { t = 0; }
+        else { t = TOTAL - 1; setPlaying(false); }
+      }
+    }
+    render(t);
+    requestAnimationFrame(frame);
+  }
+
+  /* ---- transport ------------------------------------------------------- */
+  var transport  = document.getElementById("transport");
+  var playBtn    = document.getElementById("playBtn");
+  var speedBtn   = document.getElementById("speedBtn");
+  var cleanBtn   = document.getElementById("cleanBtn");
+  var hushTimer  = null;
+  var cleanMode  = false;
+
+  function setPlaying(p) {
+    playing = p;
+    playBtn.textContent = p ? "❚❚ Pause" : "▶ Play";
+    if (p) hush(); else show();
+  }
+  function hush() {
+    clearTimeout(hushTimer);
+    if (!playing) return;
+    hushTimer = setTimeout(function () {
+      if (playing) transport.classList.add("hushed");
+    }, cleanMode ? 400 : 2200);
+  }
+  function show() {
+    clearTimeout(hushTimer);
+    transport.classList.remove("hushed");
+    if (playing) hush();
+  }
+
+  function jump(delta) {
+    var i = 0;
+    while (i < timeline.length - 1 && t >= starts[i] + timeline[i].dur) i++;
+    var target = (delta < 0 && t - starts[i] > 900) ? i : i + delta;
+    target = Math.max(0, Math.min(timeline.length - 1, target));
+    t = starts[target];
+    render(t);
+  }
+
+  playBtn.addEventListener("click", function () { setPlaying(!playing); });
+  document.getElementById("prevBtn").addEventListener("click", function () { jump(-1); });
+  document.getElementById("nextBtn").addEventListener("click", function () { jump(1); });
+  document.getElementById("restartBtn").addEventListener("click", function () { t = 0; setPlaying(true); });
+  speedBtn.addEventListener("click", function () {
+    speed = speed === 1 ? 1.5 : speed === 1.5 ? 0.75 : 1;
+    speedBtn.textContent = speed + "×";
+  });
+  cleanBtn.addEventListener("click", function () {
+    cleanMode = !cleanMode;
+    cleanBtn.setAttribute("aria-pressed", String(cleanMode));
+    document.body.style.gap = cleanMode ? "0px" : "18px";
+    show();
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.target.tagName === "BUTTON" && e.key === " ") e.preventDefault();
+    if (e.key === " ") { e.preventDefault(); setPlaying(!playing); }
+    else if (e.key === "ArrowRight") jump(1);
+    else if (e.key === "ArrowLeft") jump(-1);
+    else if (e.key === "r" || e.key === "R") { t = 0; setPlaying(true); }
+    else if (e.key === "h" || e.key === "H") cleanBtn.click();
+  });
+
+  document.addEventListener("mousemove", show);
+
+  /* embed mode: ?embed / #embed, or any time we're framed by another page */
+  var framed = false;
+  try { framed = window.self !== window.top; } catch (e) { framed = true; }
+  if (framed || /\bembed\b/.test(location.search + location.hash)) {
+    document.body.classList.add("embed");
+  }
+
+  /* loop forever when embedded — a landing-page reel should not dead-end */
+  var LOOP = document.body.classList.contains("embed");
+
+  if (reduced) { playBtn.textContent = "▶ Play"; }
+  render(0);
+  setPlaying(!reduced);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
