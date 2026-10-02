@@ -1,17 +1,9 @@
-"""
-Milestone 0 — throwaway prototype. NOT production code. Do not import this.
+"""Milestone 0 - throwaway prototype. Not production code; do not import.
 
-Its only job: de-risk section 6.3 before storage, SHAs, or a CLI exist.
-
-The claim under test: if you take a recorded run, splice an edited tool result
-into the message history at step N, and resume the real loop from there, the
-agent behaves EXACTLY as if that edit had actually happened.
-
-"Exactly" needs a falsifiable definition, so this script uses a counterfactual:
-run the same agent from scratch against a world where the tool really returns
-the edited value, and assert the forked run is indistinguishable from it.
-If fork != counterfactual, the thesis is wrong and everything downstream
-(SHA addressing, diff, bisect) needs rethinking.
+Tests one claim: splice an edited tool result into a recorded history at step N, resume the real
+loop, and the agent behaves exactly as if the edit had happened. "Exactly" means
+indistinguishable from a from-scratch run in a world where the tool really returns the edited
+value.
 
 Run:  python prototype/m0_fork_prototype.py
 """
@@ -22,11 +14,7 @@ from dataclasses import dataclass, field
 
 
 # ---------------------------------------------------------------------------
-# A fake model. Deterministic, no API calls, no key needed.
-#
-# It must genuinely BRANCH on the tool result, otherwise the counterfactual
-# test below proves nothing: a model that ignores the edit would make fork and
-# counterfactual match trivially.
+# A fake model: deterministic, and it branches on the tool result.
 # ---------------------------------------------------------------------------
 
 
@@ -65,8 +53,7 @@ def fake_model(messages, tools):
                 stop_reason="end_turn",
                 content=[{"type": "text", "text": f"Booked for ${price}."}],
             )
-        # Over budget: a whole extra step appears that never existed in the
-        # original run. The forked trajectory genuinely diverges in shape.
+        # Over budget: an extra step appears that the original run never had.
         return ModelResponse(
             stop_reason="tool_use",
             content=[
@@ -96,10 +83,7 @@ def _tool_results_in(message):
 
 
 # ---------------------------------------------------------------------------
-# "The user's code" — a raw SDK-style loop. Note it takes `messages` as a
-# parameter rather than always starting blank. That is the one integration
-# contract from section 6.3, and this prototype exists partly to check that
-# it's actually a livable requirement.
+# "The user's code": a raw loop that takes `messages` as a parameter.
 # ---------------------------------------------------------------------------
 
 
@@ -140,7 +124,7 @@ def make_tool_executor(flight_price):
 
 
 # ---------------------------------------------------------------------------
-# A crude recorder. No SQLite, no SHAs — just enough to prove the mechanic.
+# A crude recorder: no SQLite, no SHAs.
 # ---------------------------------------------------------------------------
 
 
@@ -149,9 +133,7 @@ def record(fn):
 
     def wrapped(messages, tools, call_model, execute_tools):
         def recording_call_model(msgs, tls):
-            # Snapshot the messages VERBATIM as the user's loop built them.
-            # This snapshot is the whole ballgame: it is the exact state we
-            # will later hand back to resume from. We never reconstruct it.
+            # Snapshot the messages verbatim. This is the state a fork resumes from.
             snapshot = copy.deepcopy(msgs)
             response = call_model(msgs, tls)
             steps.append(
@@ -188,21 +170,15 @@ def record(fn):
 
 
 # ---------------------------------------------------------------------------
-# The fork mechanic — the actual thing under test.
+# The fork mechanic: the thing under test.
 # ---------------------------------------------------------------------------
 
 
 def fork_from_tool_call(steps, step_index, edit, tools, call_model, execute_tools):
     """Fork at a tool_call step, substituting an edited tool output.
 
-    The seed history is NOT reconstructed from parts. It is the verbatim
-    `messages` snapshot the user's own loop handed to the NEXT model call --
-    which already contains the tool result, in whatever shape the user's loop
-    chose to put it there. We only patch the one field.
-
-    That inversion is the key move: guessing how the user assembles history
-    would make replay a plausible imitation. Reading it back verbatim makes it
-    a recording.
+    The seed history is the verbatim `messages` snapshot handed to the next model call; only the
+    one field is patched.
     """
     step = steps[step_index]
     assert step["type"] == "tool_call", "can only fork tool_call steps in M0"
@@ -218,9 +194,7 @@ def fork_from_tool_call(steps, step_index, edit, tools, call_model, execute_tool
 
     edited_output = edit(copy.deepcopy(step["output"]))
 
-    # Splice by tool_use_id, and VERIFY the splice landed. If the user's loop
-    # transformed the tool result before appending it, we cannot honestly
-    # claim the replay is what happened -- so we refuse rather than guess.
+    # Splice by tool_use_id and verify it landed, or refuse.
     patched = 0
     for recorded, new in zip(step["output"], edited_output):
         for message in seed:
@@ -241,8 +215,7 @@ def fork_from_tool_call(steps, step_index, edit, tools, call_model, execute_tool
     if patched != len(step["output"]):
         raise ValueError(f"spliced {patched} of {len(step['output'])} tool results")
 
-    # Resume the user's REAL loop from the spliced state. Everything from here
-    # is genuine re-execution -- the model actually decides again.
+    # Resume the user's real loop from the spliced state.
     return run_agent(seed, tools, call_model, execute_tools)
 
 
@@ -283,19 +256,15 @@ def main():
         edit,
         tools,
         fake_model,
-        # The world is still the $450 world. Only the spliced fact changed --
-        # so any later real tool call still runs against reality, exactly as a
-        # counterfactual should.
+        # Only the spliced fact changed; later tool calls still run against the $450 world.
         make_tool_executor(450),
     )
     # run_agent returns the response; grab the history it built via closure.
     print("FORKED (spliced flight_price=999, resumed live)")
     print(f"  answer: {forked_messages.content[-1]['text']}\n")
 
-    # 3. THE ASSERTION THAT MATTERS.
-    # Run from scratch in a world where the flight really does cost $999.
-    # If forking is real re-execution, the forked run must be indistinguishable
-    # from this counterfactual -- same trajectory, same final answer.
+    # 3. The assertion that matters: the forked run must match a from-scratch run in a world
+    # where the flight really costs $999.
     counterfactual_messages = [{"role": "user", "content": "Book me AUS to SFO."}]
     counterfactual_response = run_agent(
         counterfactual_messages, tools, fake_model, make_tool_executor(999)
@@ -320,8 +289,7 @@ def main():
             == counterfactual_response.content[-1]["text"],
         )
     )
-    # The forked run grew a step the original never had (check_budget). If the
-    # splice only relabelled data, this would not happen.
+    # The forked run grew a step (check_budget) the original never had.
     checks.append(
         (
             "fork took a structurally different path (new tool call appeared)",
@@ -333,8 +301,7 @@ def main():
             ),
         )
     )
-    # No leftover state: the original run's history must be untouched by the
-    # fork. A shared mutable list here would silently corrupt every fork.
+    # The original run's history must be untouched by the fork.
     checks.append(
         (
             "no leftover state: original history unmutated by the fork",

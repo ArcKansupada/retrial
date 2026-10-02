@@ -1,13 +1,8 @@
 """Importing a trace, and what survives the trip.
 
-The promise is not that the file parses - it is that the trace still works
-where it lands. The load-bearing test here is the last one: export a fork,
-import into an empty store, and check that `diff` and `trajectory` produce
-identical output on both sides.
-
-Everything else guards the ways an import could quietly do the wrong thing:
-run twice and duplicate, fail partway and leave half a trace, or arrive with
-timestamps from the day it was imported rather than the day it happened.
+The key test is the last: export a fork, import it into an empty store, and check `diff` and
+`trajectory` agree on both sides. The rest guard against duplicating, half-importing, or re-
+dating a trace.
 """
 
 import json
@@ -86,8 +81,7 @@ def test_a_trace_arrives_whole(source, target):
 
 
 def test_shas_survive_the_trip(source, target):
-    """The point of preserving session ids: a step stays quotable by the same
-    handle on both machines."""
+    """Session ids are preserved, so a step keeps the same handle on both machines."""
     import_(target, lines_of(source))
 
     for session_id in (source["root"], source["fork"]):
@@ -199,12 +193,7 @@ def test_a_rejected_file_leaves_the_store_untouched(source, target):
 
 
 def test_a_write_failing_partway_rolls_back(source, target, monkeypatch):
-    """The transaction itself, not just the validation in front of it.
-
-    Validation catches everything it can, so a failure here has to be
-    injected - but the guarantee exists for the cases nobody predicted, which
-    is exactly the set that cannot be triggered on purpose.
-    """
+    """The transaction itself, with a failure injected past validation."""
     import retrial.transfer as transfer
 
     real = transfer._insert_step
@@ -246,11 +235,7 @@ def test_the_store_still_works_after_a_rolled_back_import(source, target, monkey
 
 
 def test_diff_and_trajectory_agree_on_both_sides(source, target):
-    """The actual promise. Not that the file parses - that the trace works.
-
-    If this passes, someone can hand you a fork and you can see for yourself
-    what diverged, which is the entire reason the feature exists.
-    """
+    """The actual promise: the imported trace works, not just parses."""
     import_(target, lines_of(source))
 
     here = trajectory(target, source["fork"])

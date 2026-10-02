@@ -1,15 +1,7 @@
 """Turning recorded usage into dollars.
 
-Never guess: an unknown model returns None rather than a plausible-looking
-number, because a silently wrong cost is worse than a missing one - you would
-act on it.
-
-Prices are USD per million tokens and they go stale. They are a lookup table,
-not a source of truth: check `retrial cost` against your actual bill.
-
-The table ships with the models this project can verify. For anything else -
-another provider, your own fine-tune, or a model on your own hardware -
-`register_prices` says what it costs and `FREE` says it costs nothing.
+An unknown model prices as None, never a guess. Prices are USD per million tokens and go stale;
+`register_prices` adds or overrides them.
 """
 
 from __future__ import annotations
@@ -19,8 +11,7 @@ from typing import Any
 
 from .types import Step, TrajectoryEntry
 
-#: Both record kinds carry the model call's own usage. Naming the union lets
-#: `trajectory_cost` take `trajectory()` or `store.steps_for()` output uncast.
+#: Both record kinds carry usage, so `trajectory_cost` takes either uncast.
 PricedEntry = Step | TrajectoryEntry
 
 # (input, output) USD per 1M tokens. Cached 2026-06.
@@ -42,12 +33,9 @@ CACHE_READ_MULTIPLIER = 0.1
 CACHE_WRITE_MULTIPLIER = 1.25
 
 #: For a model that costs nothing per token, such as one on your own hardware.
-#: Registering it says "this is free", which is a fact; leaving it unregistered
-#: says "nobody told me" - which is why an unknown model reads as `unpriced`.
 FREE: tuple[float, float] = (0.0, 0.0)
 
-#: Prefixes that route to a model rather than name it - LiteLLM, OpenRouter,
-#: Bedrock. The price belongs to the model, not to the road taken to reach it.
+#: Routing prefixes (LiteLLM, OpenRouter, Bedrock). The price belongs to the model.
 _ROUTING_PREFIXES = (
     "anthropic.",
     "us.anthropic.",
@@ -65,12 +53,10 @@ def register_prices(prices: dict[str, tuple[float, float]]) -> None:
 
         register_prices({
             "my-finetune": (0.50, 1.50),
-            "llama3.1:70b": FREE,          # runs on my machine
+            "llama3.1:70b": FREE,
         })
 
-    Call it before the run you want priced. Registered entries match exactly
-    like built-in ones, dated suffixes included, and override a built-in of
-    the same name - so a stale price is fixable without waiting for a release.
+    Call it before the run. Entries override built-ins of the same name.
     """
     for name, price in prices.items():
         if not isinstance(name, str) or not name.strip():
@@ -99,10 +85,7 @@ def normalize(model: Any) -> str | None:
             name = name[len(prefix) :]
     if name in PRICES:
         return name
-    # Dated snapshots (claude-haiku-4-5-20251001) price as their base model.
-    # Longest match wins: with both "gpt-5" and "gpt-5-mini" in the table,
-    # "gpt-5-mini-2026-01" starts with both, and the shorter one would price
-    # a cheap model at the expensive one's rate.
+    # Dated snapshots price as their base model. Longest match wins.
     matches = [key for key in PRICES if name.startswith(key)]
     return max(matches, key=len) if matches else None
 
@@ -110,9 +93,7 @@ def normalize(model: Any) -> str | None:
 def cost_of(serialized_response: Any) -> float | None:
     """Cost in USD for one model call, or None if it cannot be known exactly.
 
-    None - not zero, and not an estimate - when the model is unknown or usage
-    is absent. Callers must treat it as "unpriced" and say so, rather than
-    summing it as free.
+    None means unpriced, not free.
     """
     if not isinstance(serialized_response, dict):
         return None
@@ -137,15 +118,9 @@ def cost_of(serialized_response: Any) -> float | None:
 
 
 def cost_of_step(entry: PricedEntry) -> float | None:
-    """A recorded step's cost, preferring what was actually paid.
+    """A recorded step's cost, preferring the `cost_usd` stored at record time.
 
-    The stored `cost_usd` is authoritative: computed at record time at the
-    prices in force then, which is what the run really cost. Re-pricing an old
-    trace against today's table would quietly rewrite history.
-
-    The fallback only matters for traces recorded before cost tracking existed,
-    or whose model was unknown then. The response carries its own model and
-    usage, so the number is still exact - just computed later.
+    Falls back to computing it from the response for older traces.
     """
     if entry.get("step_type") != "model_call":
         return None
@@ -156,11 +131,7 @@ def cost_of_step(entry: PricedEntry) -> float | None:
 
 
 def trajectory_cost(entries: Iterable[PricedEntry]) -> tuple[float, int]:
-    """(cost, unpriced_calls) over a trajectory's model calls.
-
-    Reports the calls it could not price rather than hiding them, so a partial
-    total is never mistaken for a complete one.
-    """
+    """(cost, unpriced_calls) over a trajectory's model calls."""
     total = 0.0
     unpriced = 0
     for entry in entries:

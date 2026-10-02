@@ -1,12 +1,6 @@
 """Guard: user-facing text must survive a cp1252 console.
 
-This bit twice: `retrial list` crashed outright on Windows because of box
-drawing characters, and em-dashes in help text rendered as garbage. Both are
-trivially avoidable, so the rule is enforced rather than remembered.
-
-The one sanctioned exception is `_glyphs()`, which contains box-drawing
-characters *and* the encodability check that keeps them off a console that
-can't take them.
+The one exception is `_glyphs()`, which checks encodability itself.
 """
 
 import pathlib
@@ -60,18 +54,13 @@ def test_glyphs_are_actually_gated():
 
 # --- model output is not ours to police ------------------------------------
 #
-# The rules above cover text WE wrote; below covers text the MODEL wrote, which
-# can be any Unicode at all. A real Opus run returned an emoji and killed a
-# plain `print`, and retrial prints model text in diff, bisect, and log - so an
-# emoji in an ANSWER would take down the command reporting it.
+# Text the model wrote can be any Unicode, and retrial prints it.
 
 
 class FakeConsole:
     """A writable stream reporting a specific terminal encoding.
 
-    Not io.StringIO: its `encoding` is read-only, and that is the attribute
-    under test. It must also be genuinely writable, since click.echo writes to
-    the stream rather than just inspecting it.
+    Not io.StringIO, whose `encoding` is read-only.
     """
 
     def __init__(self, encoding):
@@ -112,15 +101,12 @@ def test_echo_leaves_encodable_text_untouched(monkeypatch):
 
 
 def test_echo_passes_unicode_through_on_a_utf8_console(monkeypatch):
-    """Degrading is a last resort. A capable terminal still gets the real
-    characters."""
+    """A capable terminal still gets the real characters."""
     out = _echo_to(monkeypatch, "utf-8", "Booked ✅")
     assert "✅" in out
 
 
-#: The only two calls allowed to reach click directly - the bodies of echo()
-#: and warn(). Both degrade un-encodable characters first; the tests below
-#: prove it for each, so this list stays earned rather than granted.
+#: The only two calls allowed to reach click directly: the bodies of echo() and warn().
 GUARDED_CALLS = ("click.echo(text)", "click.echo(text, err=True)")
 
 
@@ -139,10 +125,7 @@ def test_every_cli_print_goes_through_echo():
 
 
 def test_warn_degrades_like_echo(monkeypatch):
-    """warn() is echo() for stderr, and gets the same protection.
-
-    Diagnostics are downstream of model output too - the note naming a session
-    can carry whatever the model called it."""
+    """warn() is echo() for stderr, and gets the same protection."""
     from retrial.cli import warn
 
     console = FakeConsole("cp1252")
@@ -171,10 +154,7 @@ def test_warn_leaves_encodable_text_untouched(monkeypatch):
 def test_export_data_deliberately_bypasses_echo():
     """The one place that must NOT degrade.
 
-    An export is data. A replaced character would change a step's content so
-    it no longer hashes to its own sha, and the file would be refused by its
-    own importer. write_data encodes UTF-8 explicitly for exactly this reason,
-    and this test exists so nobody 'fixes' it into echo() later.
+    An export is data: a replaced character would break the step's sha.
     """
     import ast
 
@@ -186,8 +166,7 @@ def test_export_data_deliberately_bypasses_echo():
         if isinstance(node, ast.FunctionDef) and node.name == "write_data"
     )
 
-    # The AST, not the text: the docstring explains why it avoids echo, and a
-    # substring check would trip over its own explanation.
+    # The AST, not the text, so the docstring's own wording cannot trip the check.
     called = {
         node.func.id
         for node in ast.walk(write_data)

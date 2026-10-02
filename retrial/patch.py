@@ -1,17 +1,8 @@
-"""The fork `edit` API - structured patch native, callback as escape hatch.
+"""The fork `edit` API: a structured patch, or a callback.
 
-A patch is data, so it can be stored on the fork's session row: that is what
-lets `retrial log` show WHAT you changed, not just where - otherwise two forks
-from the same step with opposite edits are indistinguishable. It is also the
-only shape the CLI can accept, since `--edit-file edit.json` cannot hold a
-lambda.
-
-A callback covers edits that depend on the step's existing content (double a
-price, truncate a document) and bisect, which generates edits programmatically.
-Callback forks record that a callback ran but cannot round-trip from the record
-alone - a real limitation, stated rather than papered over.
-
-Patch paths are JSON Pointers rooted at the step.
+A patch is data, so it is stored on the fork's session and shown by `retrial log`. A callback
+covers edits that depend on the step's content, but cannot be replayed from the record. Patch
+paths are JSON Pointers rooted at the step.
 """
 
 from __future__ import annotations
@@ -155,10 +146,8 @@ def _apply_one(doc: JSON, op: Any) -> JSON:
 def normalize_edit(edit: Edit) -> tuple[EditFn, EditProvenance | None]:
     """Return (apply_fn, provenance) for either edit shape.
 
-    `provenance` is stored on the fork's session row. For a patch it is the
-    patch itself, so the fork fully round-trips. For a callback it is an honest
-    marker: that one ran, what it was called, and that it cannot be replayed
-    from the record.
+    `provenance` is stored on the fork's session: the patch itself, or a marker that a callback
+    ran.
     """
     if edit is None:
         return (lambda step: copy.deepcopy(step)), None

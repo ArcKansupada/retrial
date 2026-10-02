@@ -1,9 +1,4 @@
-"""`python -m retrial`, identical to the `retrial` console script.
-
-RetrialGroup promises errors render the same however the CLI is entered. This
-module is what makes `python -m` one of those ways; without it the command
-fails before any of that error handling can apply.
-"""
+"""`python -m retrial`, identical to the `retrial` console script."""
 
 from .cli import main
 

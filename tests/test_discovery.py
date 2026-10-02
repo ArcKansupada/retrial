@@ -1,14 +1,7 @@
 """Which database a command uses.
 
-The bug these pin down was quiet and expensive: `.retrial/` resolved against
-the current working directory and nothing else, so `retrial log` run one
-directory down created a second, empty store and truthfully reported no
-sessions - while the real trace sat one level up. Recording split the same way,
-and the halves could disagree without either erroring.
-
-Discovery now searches upward, like git. These tests cover the search, its
-precedence against $RETRIAL_DB and --db, and the one command that must NOT
-search: `init`.
+Discovery searches upward, like git. These cover the search, its precedence against $RETRIAL_DB
+and --db, and `init`, which must not search.
 """
 
 import importlib
@@ -30,14 +23,9 @@ from retrial.storage import (
 
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch):
-    """No inherited RETRIAL_DB, and no store cached from another test.
-
-    `record` keeps one Store per path for the life of the process, so without
-    this a connection cached from a previous test's tmp_path decides the result.
-    """
+    """No inherited RETRIAL_DB, and no store cached from another test."""
     monkeypatch.delenv(ENV_VAR, raising=False)
-    # importlib, because `retrial.record` the attribute is the decorator:
-    # __init__ re-exports it over the submodule of the same name.
+    # importlib, because `retrial.record` the attribute is the decorator.
     record_module = importlib.import_module("retrial.record")
 
     def drop():

@@ -1,26 +1,18 @@
 """The booking agent, against a model running on your own machine.
 
-Same loop as `booking_agent.py` and `live_booking_agent.py`. Only the adapter
-line changes, and nothing downstream notices - the run records, forks, diffs,
-and bisects exactly as an Anthropic run does. No API key, no spend.
-
-Setup (Ollama, but any OpenAI-compatible server works the same way):
+Same loop as the other examples; only the adapter line changes.
 
     ollama serve && ollama pull llama3.1
     pip install 'retrial[openai]'
     python examples/local_model_agent.py
 
-Then fork a tool result and watch the local model decide differently:
+Then fork a tool result:
 
-    retrial fork <sha> --edit examples/edit_price.json \
+    retrial fork <sha> --edit examples/edit_price.json
         --agent examples.local_model_agent:run_agent
 
-Point it elsewhere with RETRIAL_LOCAL_MODEL / RETRIAL_LOCAL_BASE_URL:
-vLLM :8000/v1, llama.cpp :8080/v1, LM Studio :1234/v1, or OpenRouter.
-
-A word on small models: the fork machinery is exact, but a 7B model's tool
-calling is not. A run that ends without calling a tool is the model, not
-retrial - try a larger one before debugging the trace.
+Point it elsewhere with RETRIAL_LOCAL_MODEL / RETRIAL_LOCAL_BASE_URL. A small model's tool
+calling is unreliable; try a larger one before debugging the trace.
 """
 
 import json
@@ -32,8 +24,7 @@ from retrial.pricing import FREE, register_prices
 MODEL = os.environ.get("RETRIAL_LOCAL_MODEL", "llama3.1")
 BASE_URL = os.environ.get("RETRIAL_LOCAL_BASE_URL", "http://localhost:11434/v1")
 
-# It runs on your hardware, so $0.00000 is a fact worth recording. Without
-# this the model is simply unknown, and retrial reports `unpriced`.
+# Register the local model as free; otherwise it reports `unpriced`.
 register_prices({MODEL: FREE})
 
 SYSTEM = (
@@ -43,8 +34,7 @@ SYSTEM = (
     "say so and stop."
 )
 
-# Declared once, in canonical form. The adapter translates them into whatever
-# schema the server expects, so switching providers never edits this list.
+# Declared once in canonical form; the adapter translates them.
 TOOLS = [
     {
         "name": "search_flight",
@@ -73,8 +63,7 @@ TOOLS = [
     },
 ]
 
-# Safe at import: the adapter builds its client on first call, so `--help`
-# never needs a server to be running.
+# Safe at import: the adapter builds its client on first call.
 call_model = openai_adapter(
     model=MODEL,
     base_url=BASE_URL,
@@ -121,8 +110,7 @@ if __name__ == "__main__":
         echo(f"Is a server running at {BASE_URL}? For Ollama: `ollama serve`.")
         raise SystemExit(1) from exc
 
-    # Not `print`: a model answers with emoji, which a bare print dies on
-    # under a cp1252 console. echo() degrades the glyph instead of the run.
+    # Not `print`: echo() degrades a character a cp1252 console cannot encode.
     echo(f"\n{result.text}")
     echo(f"\nRecorded session {run_agent.last_session_id}")
     echo(f"  retrial log {run_agent.last_session_id}")

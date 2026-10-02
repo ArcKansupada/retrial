@@ -1,14 +1,6 @@
 """A Store is shared between threads, not one per thread.
 
-Two runs recording at once is a normal thing to want - a web service, a
-harness evaluating several prompts in parallel. sqlite3 refuses cross-thread
-use of a connection by default, so that pattern used to fail as a raw
-`ProgrammingError` several frames deep, and the process-wide store cache
-raced besides.
-
-These tests run real threads. They are deterministic in what they assert -
-never "did the race happen this time" - but they do use enough concurrency
-that the unguarded versions fail reliably.
+These run real threads, with enough concurrency that unguarded code fails reliably.
 """
 
 import importlib
@@ -26,8 +18,7 @@ THREADS = 8
 def gather(fn, count=THREADS):
     """Run `fn(i)` on `count` threads, all released at once.
 
-    The barrier matters: without it the pool can finish the first call before
-    starting the second, and a race that needs overlap never gets any.
+    The barrier guarantees the calls overlap.
     """
     barrier = threading.Barrier(count)
 
@@ -77,16 +68,8 @@ def test_steps_recorded_concurrently_into_one_session_all_survive(
 ):
     """The read-then-write window that `next_step_number` leaves open.
 
-    Two threads ask for the next number, get the same answer, and the loser
-    hits UNIQUE(session_id, step_number). add_step allocates inside the lock
-    instead.
-
-    The delay is what makes this deterministic rather than lucky. Timed as it
-    comes, the window is narrow enough that eight threads sail through it -
-    this test passed against the broken implementation until the sleep was
-    added. Widening the read makes the bug certain; it costs the fixed
-    implementation nothing, because there the read happens with the lock held
-    and the other threads are waiting anyway.
+    add_step allocates inside the lock instead. The delay widens the window so the bug is
+    certain, not lucky.
     """
     real = type(store)._next_step_number
 
@@ -141,11 +124,7 @@ def test_the_default_store_is_created_exactly_once(tmp_path, monkeypatch):
 def test_pending_context_does_not_leak_between_threads(store):
     """`_pending` is how fork tells the decorator which session to record into.
 
-    As a module-level dict (or a threading.local) two concurrent forks could
-    clobber each other and one agent's steps landed under the other's session -
-    a trace that reads as valid and describes a run that never happened. As a
-    ContextVar each thread has its own context, so a value set on one is
-    invisible to the others.
+    As a ContextVar, a value set on one thread is invisible to the others.
     """
     record_module = importlib.import_module("retrial.record")
     sessions = [store.create_session(name=f"fork-{i}") for i in range(THREADS)]

@@ -74,8 +74,7 @@ def record_a_run(db, tmp_path, module="toy_agent"):
         f"st.default_db_path = lambda root=None: {db!r};"
         f"{module}.run_agent([{{'role':'user','content':'hi'}}])"
     )
-    # The decorator resolves the default store lazily, so point it at the temp
-    # db by running in a subprocess with cwd set.
+    # Run in a subprocess with cwd set, since the default store resolves lazily.
     subprocess.run(
         [sys.executable, "-c", script],
         cwd=str(tmp_path),
@@ -98,8 +97,7 @@ def test_list_on_an_empty_store(env):
 
 
 def test_glyphs_fall_back_to_ascii_on_a_cp1252_console(monkeypatch):
-    """`retrial list` printed box-drawing characters and crashed outright on
-    Windows' default cp1252 console. Never again."""
+    """Box-drawing characters must not crash a cp1252 console."""
 
     class Cp1252Stdout:
         encoding = "cp1252"
@@ -139,8 +137,7 @@ def test_log_show_and_fork_end_to_end(env):
     shown = run("show", sha)
     assert "tool_call" in shown.output
     assert "tool_result" in shown.output
-    # The tool result's content is itself a JSON string, so it shows escaped -
-    # honestly so: those are the bytes a patch must target.
+    # The tool result's content is a JSON string, so it shows escaped.
     assert r'{\"price\": 450}' in shown.output
 
     edit = tmp_path / "edit.json"
@@ -232,8 +229,7 @@ def test_diff_of_a_session_with_itself_is_clean(env):
 
 
 def test_diff_full_flag_expands_the_shared_prefix(env):
-    """Without --full the shared prefix collapses to a count; with it, every
-    step is listed. Needs a real divergence - identical runs short-circuit."""
+    """Without --full the shared prefix collapses to a count. Needs a real divergence."""
     run, db, tmp_path = env
     run("init")
     record_a_run(db, tmp_path)
@@ -429,8 +425,7 @@ def test_sweep_end_to_end(env):
 
 
 def test_sweep_samples_reports_rates(env):
-    """toy_agent is deterministic, so the rates are 3/3 and 0/3 - which is what
-    makes them readable as an assertion about the rendering."""
+    """toy_agent is deterministic, so the rates are 3/3 and 0/3."""
     run, db, tmp_path = env
     session_id = _record_and_get(run, db, tmp_path)
     sha = next(
@@ -511,9 +506,7 @@ def test_sweep_rejects_a_values_file_that_is_not_a_list(env):
 
 # -- entry points -------------------------------------------------------------
 #
-# Both are promises made in prose elsewhere (`--version` is the first thing
-# anyone types when filing a bug; `python -m` is named in RetrialGroup's own
-# docstring), so both get a test that fails if the promise stops holding.
+# `--version` and `python -m` are both promised elsewhere.
 
 
 def test_version_flag_reports_the_package_version():
@@ -552,10 +545,7 @@ def test_python_dash_m_retrial_is_a_working_entry_point():
 def test_package_ships_the_pep561_typed_marker():
     """py.typed is what makes the annotations visible to a consumer.
 
-    Without it, every downstream `from retrial import ...` is typed as Any no
-    matter how carefully the package is annotated - so the marker is part of
-    the API, not packaging trivia. Asserted against the INSTALLED package, to
-    cover an editable install and a wheel alike.
+    Asserted against the installed package.
     """
     from pathlib import Path
 

@@ -1,35 +1,21 @@
 """Adapters: use retrial with any model, from any provider.
 
-retrial's core never imports an LLM SDK - it intercepts the `call_model` you
-pass in. That works until you fork a `tool_call` step, because splicing a tool
-result back into the history means knowing where it lives, and every provider
-spells that differently. So adapters normalize at the edge: translate one
-provider's shape to and from the canonical shape below, and `fork`, `diff`,
-`bisect`, `ablate`, `sweep`, `rerun`, and `cost` all keep working unchanged.
+Each adapter translates one provider's wire format to and from the canonical shape below, so
+forking a `tool_call` step works whoever ran the call.
 
     messages       {"role": "user"|"assistant", "content": str | [block, ...]}
     tool call      {"type": "tool_use", "id":..., "name":..., "input": {...}}
     tool result    {"type": "tool_result", "tool_use_id":..., "content": str}
     response       .content (blocks), .stop_reason, .usage, .model
 
-Tools are declared once in canonical form (`name`, `description`,
-`input_schema`); each adapter translates them, so changing models never means
-rewriting your tool list.
+Tools are declared once in canonical form (`name`, `description`, `input_schema`).
 
     from retrial.providers import openai_adapter
 
     call_model = openai_adapter(model="gpt-5")
+    call_model = openai_adapter(model="llama3.1", base_url="http://localhost:11434/v1")
 
-    # ...or the same agent against a model on your own machine:
-    call_model = openai_adapter(
-        model="llama3.1",
-        base_url="http://localhost:11434/v1",   # ollama, vllm, llama.cpp, LM Studio
-        api_key="unused",
-    )
-
-Writing your own means returning a `ModelResponse` from `call_model` - see
-`Adapter`. SDKs are optional extras (`retrial[openai]`, `retrial[gemini]`)
-imported lazily, so a plain install still pulls in nothing but `click`.
+SDKs are optional extras (`retrial[openai]`, `retrial[gemini]`), imported lazily.
 """
 
 from __future__ import annotations
@@ -69,14 +55,7 @@ class ModelResponse:
         self.raw = raw
 
     def to_dict(self) -> dict[str, Any]:
-        """What lands in the trace.
-
-        `serialize.to_jsonable` finds this before falling back to `__dict__`,
-        so this method alone decides the recorded shape - which is what keeps
-        a step identical whoever produced it. It also keeps `raw` out: the
-        untranslated response is useful at runtime, but recording it would
-        store every response twice, in the provider's field names.
-        """
+        """What lands in the trace. Leaves `raw` out."""
         return {
             "content": self.content,
             "stop_reason": self.stop_reason,
@@ -107,9 +86,7 @@ class ModelResponse:
 class Adapter(Protocol):
     """What retrial needs from a provider.
 
-    Callable, so it can be passed straight in as `call_model`. The translators
-    are separate and pure because that is the part worth testing, and they can
-    be tested against a captured payload with no network and no key.
+    Callable, so it can be passed as `call_model`. The translators are pure.
     """
 
     def __call__(self, messages: list[JSON], tools: list[JSON]) -> ModelResponse:
@@ -126,11 +103,7 @@ class Adapter(Protocol):
 
 
 def tool_result(tool_use_id: str, content: Any) -> dict[str, Any]:
-    """Build the canonical tool-result block a fork splices on.
-
-    Use it in `execute_tools` and the block carries the `tool_use_id` that
-    `fork._splice_tool_output` matches on, whichever provider ran the call.
-    """
+    """Build the canonical tool-result block a fork splices on."""
     if not isinstance(tool_use_id, str) or not tool_use_id:
         raise ValueError(
             f"tool_use_id must be a non-empty string, got {tool_use_id!r}; "
@@ -144,11 +117,7 @@ def tool_result(tool_use_id: str, content: Any) -> dict[str, Any]:
 
 
 def tool_uses(response: Any) -> list[dict[str, Any]]:
-    """The tool calls in a response, live objects or replayed dicts alike.
-
-    A replayed step hands your loop the recorded dict rather than the SDK's
-    object, so anything reading `.content` has to cope with both.
-    """
+    """The tool calls in a response, whether a live object or a replayed dict."""
     content = (
         response.get("content")
         if isinstance(response, dict)

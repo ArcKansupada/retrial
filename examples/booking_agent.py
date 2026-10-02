@@ -1,10 +1,7 @@
 """A toy three-tool booking agent you can fork, diff, and bisect immediately.
 
-Deliberately a raw SDK-shaped loop - call the model, execute tool calls, append
-results - because that is retrial's target user.
-
-It ships with a scripted `call_model` so you can try everything with no API key
-and no spend. Swap it for the real thing and nothing else changes:
+A raw SDK-shaped loop with a scripted `call_model`, so it needs no API key. To use a real model,
+swap that one function:
 
     import anthropic
     client = anthropic.Anthropic()
@@ -61,10 +58,9 @@ TOOLS = [
 
 
 def call_model(messages, tools=None):
-    """A scripted stand-in for `client.messages.create`. No API key needed.
+    """A scripted stand-in for `client.messages.create`.
 
-    It branches on what the tools return, which is what makes forking
-    interesting: substitute a fact and the agent takes another path.
+    It branches on what the tools return, so a substituted fact changes its path.
     """
     last = messages[-1]
 
@@ -84,9 +80,7 @@ def call_model(messages, tools=None):
     payload = json.loads(latest["content"])
 
     if latest["tool_use_id"] == "toolu_search":
-        # Handle a missing fare rather than assuming the schema. `retrial
-        # ablate` blanks each fact in turn to see which ones matter, so an
-        # agent that hard-crashes on a blank result cannot be ablated.
+        # Handle a missing fare, so `retrial ablate` can blank it without a crash.
         if "flight_price" not in payload:
             return _reply("I couldn't get a fare for that route.", usage=(520, 12))
         price = payload["flight_price"]
@@ -164,10 +158,7 @@ def _run(name, args):
     if name == "check_budget":
         return {"approved": False, "limit": 600, "amount": args["amount"]}
     if name == "book_flight":
-        # Simulates the airline API being down. Set RETRIAL_DEMO_OUTAGE=1 to
-        # record a failing run, then bisect it with the variable unset: the
-        # outage is over, so re-execution can recover - exactly the transient
-        # failure bisect exists to localize.
+        # Simulates an outage. Record with RETRIAL_DEMO_OUTAGE=1, then bisect with it unset.
         if os.environ.get("RETRIAL_DEMO_OUTAGE"):
             return {"error": "airline API timed out"}
         return {"confirmation": "QX7R2M", "amount": args["amount"]}
@@ -176,15 +167,12 @@ def _run(name, args):
 
 @record(session_name="booking-agent")
 def run_agent(messages, tools=TOOLS, call_model=call_model, execute_tools=execute_tools):
-    """A raw agent loop. The whole integration contract is two things:
+    """A raw agent loop. The integration contract:
 
-    1. `messages` is a parameter, so a fork can seed it with edited history
-       instead of always starting blank.
-    2. The model call and the tool executor are passed in, so @record can
-       intercept them without monkey-patching the SDK.
+    1. `messages` is a parameter, so a fork can seed it with edited history. 2. The model call
+    and tool executor are passed in, so @record can intercept them.
 
-    The defaults let `retrial fork --agent ...` and `retrial bisect` call this
-    with only the seeded message list.
+    The defaults let the CLI call this with only the seeded message list.
     """
     while True:
         response = call_model(messages, tools)

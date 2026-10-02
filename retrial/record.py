@@ -1,11 +1,7 @@
 """The recording layer.
 
-A decorator wraps the user's existing loop. It needs two integration points:
-the function that calls the model, and the function that executes tool calls.
-Both are passed in as explicit arguments rather than monkey-patched onto the
-SDK client. That's more code for the user up front, but every recorded step
-traces back to a line they wrote - which matters when the whole product's
-credibility rests on "the replay is exactly what happened".
+A decorator wraps the user's loop. The model-calling and tool-executing functions are passed in
+explicitly, not monkey-patched, so every recorded step traces back to a line the user wrote.
 """
 
 from __future__ import annotations
@@ -32,52 +28,32 @@ R = TypeVar("R")
 def _is_async(obj: object) -> bool:
     """True for anything that returns a coroutine when called.
 
-    `iscoroutinefunction` already sees through `functools.partial`, but not
-    through a class with an `async def __call__` - a shape real SDK clients do
-    use. Checking both keeps the refusal honest rather than merely typical.
+    Covers a class with an `async def __call__`, which `iscoroutinefunction` misses.
     """
     if inspect.iscoroutinefunction(obj):
         return True
     if not callable(obj) or inspect.isroutine(obj):
         return False
-    # Being callable is exactly what guarantees type(obj).__call__ exists, so
-    # this cannot raise. It is the object's own __call__ we need to inspect -
-    # `callable()` answers a different question and would miss this entirely.
+    # A callable always has type(obj).__call__, so this cannot raise.
     return inspect.iscoroutinefunction(type(obj).__call__)
 
-# Handoff from fork() to the decorator: it names the session the very next
-# recorded run belongs to, so a re-executed run records into the fork's session
-# (with its parent provenance) instead of minting a fresh root.
-#
-# A ContextVar, not a threading.local, because it has to stay correct under both
-# concurrency models. asyncio copies the context per Task, so concurrent forks
-# under asyncio.gather each see their own handoff; threads start from the default
-# context and never share one. A plain module dict - or a threading.local - lets
-# two concurrent async forks on one thread clobber each other, recording one
-# agent's steps into the other's session: a trace that looks fine and describes a
-# run that never happened. Wrong provenance is worse than a crash.
+# Handoff from fork() to the decorator: the session the next recorded run belongs to. A
+# ContextVar, so concurrent forks under asyncio or threads each see their own.
 _pending: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
     "retrial_pending", default=None
 )
 
-# One Store per database per process, shared across threads - Store itself is
-# thread-safe. Without this, every recorded run opens a new sqlite connection
-# and never closes it.
+# One Store per database per process, shared across threads.
 _default_stores: dict[str, Store] = {}
 
-# Guards the cache, not the stores. `if path not in cache: cache[path] = Store()`
-# is two operations: every thread can pass the test, every thread opens a
-# connection, and each gets back whichever object happened to land in the dict
-# last. Measured with 8 threads: 8 connections opened, 7 orphaned, and callers
-# holding stores that are not the cached one.
+# Guards the cache: check-then-insert is not atomic across threads.
 _stores_lock = threading.Lock()
 
 
 def _default_store() -> Store:
     from .storage import resolve_db_path
 
-    # Searches upward, so an agent launched from a subdirectory of the project
-    # records into the project's store - the same one the CLI will find.
+    # Searches upward, so a run from a subdirectory records into the project's store.
     path = resolve_db_path()
     with _stores_lock:
         store = _default_stores.get(path)
@@ -104,14 +80,9 @@ def record(
                     return response
                 messages.append({"role": "user", "content": execute_tools(response)})
 
-    `messages` must be a parameter, not a blank start assumed inside the body.
-    That is the one non-negotiable convention: it's what lets a fork seed the
-    loop with edited history and get genuine re-execution.
-
-    The decorated function keeps its own signature, so your call sites stay
-    checked. It also gains `last_session_id` and `__retrial_agent__`; those are
-    set with `type: ignore` because a function object has no such attributes
-    statically, which is exactly what `types.Agent` describes.
+    `messages` must be a parameter: that is what lets a fork seed the loop with edited history.
+    The decorated function keeps its signature and gains `last_session_id` and
+    `__retrial_agent__`.
     """
 
     def decorator(fn: Callable[P, R]) -> Callable[P, R]:
@@ -133,12 +104,7 @@ def record(
             bound = signature.bind(*args, **kwargs)
             bound.apply_defaults()
 
-            # Validate BEFORE touching the store. Both interception points are
-            # wrapped here, before the body runs, so a lazily-constructed
-            # callable cannot work: a `None` sentinel meant to be replaced inside
-            # the body gets wrapped instead, failing as "'NoneType' is not
-            # callable" several frames deep. Say so at the boundary - and before
-            # a session row exists, or a rejected call strands an empty session.
+            # Validate before touching the store, so a rejected call leaves no empty session.
             for name in (model_arg, tools_arg):
                 value = bound.arguments[name]
                 if not callable(value):
@@ -150,12 +116,8 @@ def record(
                         "it a real function as its default and do any lazy setup "
                         "(client construction, auth) on first call inside it."
                     )
-                # A sync agent cannot await an async interception point: the loop
-                # never awaits it, so what gets recorded is an un-awaited
-                # coroutine, not the response. (An async agent handles an async
-                # call_model fine - that path awaits it.) Name it here rather than
-                # let it surface from the serializer as "cannot serialize
-                # coroutine", which is true but silent about the cause.
+                # A sync agent cannot await an async interception point. Refuse it here, by
+                # name.
                 if not agent_is_async and _is_async(value):
                     raise IntegrationError(
                         f"{fn.__name__}() is a synchronous agent but got an async "
@@ -166,8 +128,7 @@ def record(
                         "asyncio.run internally)."
                     )
 
-            # Consume the fork handoff exactly once, so a nested or later run in
-            # the same context does not re-inherit it.
+            # Consume the fork handoff exactly once.
             ctx = _pending.get()
             _pending.set(None)
             active_store = ctx["store"] if ctx else (store or _default_store())
@@ -189,8 +150,7 @@ def record(
                 bound, active_store, session_id = setup(args, kwargs)
                 wrapper.last_session_id = session_id  # type: ignore[attr-defined]
                 try:
-                    # fn is an async def here (agent_is_async), so its result is
-                    # awaitable; the TypeVar R cannot express that to the checker.
+                    # fn is async here, so its result is awaitable; R cannot express that.
                     result = await fn(*bound.args, **bound.kwargs)  # type: ignore[misc]
                 except BaseException:
                     active_store.set_status(session_id, "failed")
@@ -207,8 +167,7 @@ def record(
                 try:
                     result = fn(*bound.args, **bound.kwargs)
                 except BaseException:
-                    # A crashed run is the one you most want to inspect, so keep
-                    # every step recorded so far and mark why it stopped.
+                    # Keep every step a crashed run recorded, and mark why it stopped.
                     active_store.set_status(session_id, "failed")
                     raise
                 active_store.set_status(session_id, "complete")
@@ -226,14 +185,10 @@ class _Recorder:
         self.store = store
         self.session_id = session_id
 
-        # Step numbers are allocated by add_step(None, ...) inside the store's
-        # lock, rather than read here and passed in - see Store.add_step.
+        # Step numbers are allocated inside the store's lock; see Store.add_step.
 
     def wrap_model(self, call_model: Callable[..., Any]) -> Callable[..., Any]:
-        # Snapshot the history VERBATIM, exactly as the user's loop built it,
-        # before the model sees it. This snapshot is what a fork later replays -
-        # we never reconstruct history from parts, because guessing how the loop
-        # assembles messages would make the replay an imitation, not a recording.
+        # Snapshot the history verbatim before the model sees it. This is what a fork replays.
         if _is_async(call_model):
 
             @functools.wraps(call_model)
@@ -316,11 +271,9 @@ def _tool_uses(serialized_response: JSON) -> JSON:
 
 
 def _usage(serialized_response: JSON) -> tuple[int | None, float | None]:
-    """Best-effort token/cost accounting. Absent usage is fine, not an error.
+    """Best-effort token and cost accounting.
 
-    Cost is None whenever it cannot be known exactly - an unknown model, or a
-    response with no usage. Never an estimate: a wrong cost is worse than a
-    missing one, because you would act on it.
+    Cost is None whenever it cannot be known exactly; never an estimate.
     """
     if not isinstance(serialized_response, dict):
         return None, None

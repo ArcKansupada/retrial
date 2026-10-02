@@ -64,8 +64,7 @@ def test_json_pointer_escapes():
     ],
 )
 def test_bad_patches_fail_loudly(patch, message):
-    """A typo'd path must not silently no-op - it would look like the edit had
-    no effect on the model, which is a real and misleading finding."""
+    """A typo'd path must raise, not silently no-op."""
     with pytest.raises(PatchError, match=message):
         apply_patch(STEP, patch)
 

@@ -1,17 +1,12 @@
 """OpenAI, and every server that speaks its wire format.
 
-The Chat Completions shape is the de-facto standard, so `base_url` is all it
-takes to run the same recorded agent against something else:
-
     ollama      http://localhost:11434/v1
     vLLM        http://localhost:8000/v1
     llama.cpp   http://localhost:8080/v1
     LM Studio   http://localhost:1234/v1
     OpenRouter  https://openrouter.ai/api/v1
 
-Local servers ignore the key but the SDK insists one exists, hence
-`api_key="unused"`. An unpriced model records as `unpriced` rather than a
-guess; see `pricing.register_prices` and `pricing.FREE`.
+Local servers ignore the key but the SDK requires one, hence `api_key="unused"`.
 """
 
 from __future__ import annotations
@@ -24,8 +19,7 @@ from . import ModelResponse
 
 __all__ = ["OpenAIAdapter", "openai_adapter"]
 
-#: Unrecognized reasons pass through untranslated - inventing a mapping for a
-#: value we have not seen would misreport why a run stopped.
+#: Unrecognized reasons pass through untranslated.
 _STOP_REASONS = {
     "tool_calls": "tool_use",
     "function_call": "tool_use",
@@ -37,8 +31,7 @@ _STOP_REASONS = {
 class OpenAIAdapter:
     """Canonical messages in, canonical `ModelResponse` out.
 
-    Construct once and pass in as `call_model`. Extra keyword arguments
-    (temperature, top_p, seed, ...) are forwarded to every request.
+    Extra keyword arguments (temperature, top_p, seed, ...) go on every request.
     """
 
     def __init__(
@@ -61,11 +54,7 @@ class OpenAIAdapter:
 
     @property
     def client(self) -> Any:
-        """Built on first use, never at import.
-
-        `@record` wraps `call_model` when the decorator runs, so building a
-        client at module scope would demand credentials just to run `--help`.
-        """
+        """Built on first use, so importing needs no credentials."""
         if self._client is None:
             try:
                 import openai
@@ -97,8 +86,7 @@ class OpenAIAdapter:
         if self.max_tokens is not None:
             request["max_tokens"] = self.max_tokens
         if tools:
-            # Omitted when empty: some compatible servers reject `tools: []`
-            # rather than reading it as "no tools".
+            # Omitted when empty: some compatible servers reject `tools: []`.
             request["tools"] = [to_openai_tool(t) for t in tools]
         request.update(self.params)
         return request
@@ -117,8 +105,7 @@ class OpenAIAdapter:
         finish = _get(choice, "finish_reason")
         stop_reason: str | None
         if any(b.get("type") == "tool_use" for b in content):
-            # Some compatible servers label a tool turn "stop". The loop
-            # branches on this, so the content is the more reliable signal.
+            # Some compatible servers label a tool turn "stop"; trust the content.
             stop_reason = "tool_use"
         else:
             stop_reason = _STOP_REASONS.get(finish, finish) if finish else None
@@ -140,9 +127,7 @@ def openai_adapter(model: str, **kwargs: Any) -> OpenAIAdapter:
 def to_openai_messages(messages: list[JSON], system: str | None = None) -> list[JSON]:
     """Canonical history -> OpenAI's message list.
 
-    The lossy direction: OpenAI puts tool results in their own top-level
-    `role: "tool"` messages, so one canonical message can become several -
-    which is why retrial forks the canonical history and not this one.
+    Lossy: tool results become separate `role: "tool"` messages.
     """
     out: list[JSON] = []
     if system:
@@ -164,8 +149,7 @@ def to_openai_messages(messages: list[JSON], system: str | None = None) -> list[
             out.append(_assistant_message(content))
             continue
 
-        # A user turn: tool results become their own messages, anything
-        # textual stays a user message, and the order between them is kept.
+        # A user turn: tool results become their own messages, in order.
         texts: list[str] = []
         for block in content:
             if not isinstance(block, dict):
@@ -207,9 +191,7 @@ def _assistant_message(content: list[JSON]) -> JSON:
                     },
                 }
             )
-        # Reasoning blocks are dropped: they are Anthropic's signed artifacts,
-        # meaningless to another provider and rejected by some. The trace still
-        # records them - this only builds the next request.
+        # Reasoning blocks are dropped from the request; the trace still records them.
 
     message: dict[str, Any] = {"role": "assistant"}
     message["content"] = "\n".join(texts) if texts else None
@@ -221,8 +203,7 @@ def _assistant_message(content: list[JSON]) -> JSON:
 def to_openai_tool(tool: JSON) -> JSON:
     """Canonical tool declaration -> OpenAI's function schema.
 
-    A tool already in OpenAI's shape passes through, so an existing OpenAI
-    agent can adopt the adapter without rewriting its tool list.
+    A tool already in OpenAI's shape passes through.
     """
     if not isinstance(tool, dict):
         return tool
@@ -243,9 +224,7 @@ def to_openai_tool(tool: JSON) -> JSON:
 def to_usage(usage: Any) -> dict[str, Any]:
     """OpenAI token counts -> retrial's usage keys.
 
-    The subtraction matters: `prompt_tokens` includes the cached prefix, while
-    retrial prices `input_tokens` and `cache_read_input_tokens` separately.
-    Passing it through unchanged bills cached tokens twice.
+    `prompt_tokens` includes cached tokens, which retrial prices apart, so they are subtracted.
     """
     if usage is None:
         return {}
@@ -273,11 +252,9 @@ def _to_tool_use(call: Any) -> dict[str, Any]:
 
 
 def _parse_arguments(arguments: Any) -> dict[str, Any]:
-    """Arguments as a dict - and honest when they are not valid JSON.
+    """Arguments as a dict.
 
-    Small models do emit malformed argument strings. Substituting `{}` would
-    record a call the model never made, so the raw text is kept where a tool
-    executor can see and reject it.
+    Malformed JSON is kept verbatim under `_unparsed_arguments`, not replaced by `{}`.
     """
     if isinstance(arguments, dict):
         return arguments

@@ -1,14 +1,7 @@
 """Turning live objects into stable JSON.
 
-Two requirements pull in the same direction:
-
-1. Step SHAs hash the serialized input/output, so serialization must be
-   deterministic - same object, same bytes, forever.
-2. A fork replays recorded state back into a live loop, so it must round-trip
-   losslessly for anything we intend to replay.
-
-Where (2) can't be met we say so loudly rather than storing a lossy shadow and
-pretending the replay is faithful.
+Serialization must be deterministic, since step SHAs hash it, and lossless, since forks replay
+it. Anything that cannot round-trip raises.
 """
 
 from __future__ import annotations
@@ -26,9 +19,8 @@ _PRIMITIVES = (str, int, float, bool, type(None))
 def to_jsonable(obj: Any, _path: str = "", _seen: frozenset[int] | None = None) -> JSON:
     """Convert an arbitrary object into JSON-safe primitives.
 
-    Handles the shapes SDK response objects actually take: Pydantic models
-    (`model_dump`), plain SDK objects (`to_dict`), dataclasses, namedtuples,
-    and ordinary containers.
+    Handles Pydantic models, SDK objects with `to_dict`, dataclasses, namedtuples and
+    containers.
     """
     if _seen is None:
         _seen = frozenset()
@@ -36,8 +28,7 @@ def to_jsonable(obj: Any, _path: str = "", _seen: frozenset[int] | None = None) 
     if isinstance(obj, _PRIMITIVES):
         return obj
 
-    # A cyclic message history is not something we can replay, and would
-    # recurse forever. Refuse.
+    # A cyclic history cannot be replayed. Refuse.
     marker = id(obj)
     if marker in _seen:
         raise ReplayIntegrityError(
@@ -86,9 +77,5 @@ def to_jsonable(obj: Any, _path: str = "", _seen: frozenset[int] | None = None) 
 
 
 def canonical_json(obj: JSON) -> str:
-    """Deterministic JSON. Feeds both storage and step SHAs.
-
-    `sort_keys` is what keeps a SHA stable across runs: without it, dict
-    ordering would give the same logical step a different SHA.
-    """
+    """Deterministic JSON, for storage and step SHAs. `sort_keys` keeps a SHA stable."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)

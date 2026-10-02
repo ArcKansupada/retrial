@@ -1,18 +1,10 @@
 """The on-disk export format: reading and writing rows.
 
-JSONL. One JSON object per line, discriminated by `kind`, so a file streams,
-appends, diffs in a pull request, and survives a truncated write with
-everything before the tear still readable. A binary format would save bytes and
-cost all of that.
+JSONL, one object per line, discriminated by `kind`. This module knows the format only, not the
+store.
 
-This module knows the format and nothing else - no store, no session walking.
-`export` and `import` are built on top of it, which keeps the question "is this
-file well formed?" answerable without a database.
-
-Two ordering rules are guarantees, not conventions: the header is line 1, and
-every session appears before any step and before any fork that references it.
-An importer is allowed to rely on both, so `parse_document` enforces them
-rather than trusting the producer - including when the producer was us.
+Two ordering rules are guaranteed and enforced by `parse_document`: the header is line 1, and
+every session appears before any step or fork that references it.
 """
 
 from __future__ import annotations
@@ -33,10 +25,7 @@ from .types import (
     Step,
 )
 
-#: Version of the file layout. Bump when the envelope changes; add a translator
-#: in `_TRANSLATORS` for every version that has ever shipped.
-#:
-#: v1: header + session + step rows, as described above.
+#: Version of the file layout. Bump when the envelope changes and add a translator.
 FORMAT_VERSION = 1
 
 _KINDS = ("header", "session", "step")
@@ -83,12 +72,7 @@ def header_row(schema: int, requires: Iterable[str] = ()) -> ExportHeader:
 
 
 def session_row(session: Session) -> ExportSession:
-    """A stored session as a portable row.
-
-    `edit_json` becomes a parsed `edit`: the file is meant to be read by a
-    person deciding whether to import it, and an escaped JSON string inside a
-    JSON string defeats that.
-    """
+    """A stored session as a portable row. `edit_json` becomes a parsed `edit`."""
     raw = session["edit_json"]
     return {
         "kind": "session",
@@ -123,9 +107,7 @@ def step_row(step: Step) -> ExportStep:
 def dump_line(row: ExportRow) -> str:
     """One row as one line, newline included.
 
-    `sort_keys` is not for the sha - that is computed over `canonical_json` of
-    the payload alone - but so two exports of the same trace are byte-identical
-    and a re-export shows up as an empty diff.
+    `sort_keys` makes two exports of the same trace byte-identical.
     """
     return json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n"
 
@@ -148,12 +130,9 @@ def dump_document(
 
 @dataclass
 class Document:
-    """A parsed export file.
+    """A parsed export file. Unpacks as `header, sessions, steps`.
 
-    Unpacks as `header, sessions, steps`, which is all most callers want. It
-    also carries where each row came from: a validation failure discovered
-    after parsing - a step whose content does not match its sha - still needs
-    to name a line, and by then the row is just a dict with no memory of one.
+    Also records which line each row came from, for later validation errors.
     """
 
     header: ExportHeader
@@ -170,13 +149,7 @@ class Document:
 
 
 def parse_line(text: str, line: int, path: str | None = None) -> ExportRow:
-    """One line into a row, or refuse with the line number.
-
-    Type-checks each field. A `step_number` arriving as a string would
-    otherwise flow into the store and only surface later as steps ordering
-    lexicographically - the kind of quiet wrongness that is much cheaper to
-    catch at the boundary.
-    """
+    """One line into a row, type-checking each field, or refuse with the line number."""
 
     def bad(message: str) -> ExportFormatError:
         return ExportFormatError(message, line=line, path=path)
@@ -236,13 +209,7 @@ def parse_line(text: str, line: int, path: str | None = None) -> ExportRow:
 def parse_document(lines: Iterable[str], path: str | None = None) -> Document:
     """A whole file into its three parts, with the ordering rules enforced.
 
-    Blank lines are skipped: a file that gained a trailing newline in transit
-    is still the same file, and refusing it would be pedantry rather than
-    integrity. Anything else that is not a well-formed row is refused.
-
-    What this does NOT do is check shas or touch a store - see `import`. The
-    split exists so "is this file well formed?" has an answer that does not
-    depend on a database.
+    Blank lines are skipped. Does not check shas or touch a store; see `import`.
     """
     header: ExportHeader | None = None
     sessions: list[ExportSession] = []
@@ -274,8 +241,7 @@ def parse_document(lines: Iterable[str], path: str | None = None) -> Document:
 
         if kind == "session":
             if steps:
-                # Sessions first is what lets an importer create every session
-                # before any step references one.
+                # Sessions come first so an importer can create them before any step.
                 raise bad("a session row after a step row; sessions come first")
             session = cast(ExportSession, row)
             if session["id"] in seen_sessions:
@@ -288,9 +254,7 @@ def parse_document(lines: Iterable[str], path: str | None = None) -> Document:
 
         step = cast(ExportStep, row)
         if step["sha"] in seen_shas:
-            # A sha covers session, step number, and content, so two rows
-            # sharing one are the same step written twice - and there is no
-            # honest way to pick which copy was meant.
+            # Two rows sharing a sha are the same step written twice.
             raise bad(f"step {step['sha'][:12]} appears twice")
         if step["session_id"] not in seen_sessions:
             raise bad(
@@ -320,12 +284,7 @@ def parse_document(lines: Iterable[str], path: str | None = None) -> Document:
             path=path,
         )
 
-    # Deferred, because "the parent comes first" and "the parent is here at
-    # all" are different questions and only the first belongs to the format.
-    # A file exported with --no-ancestors names parents it does not contain,
-    # and that is legal here: whether the store already has them is what
-    # `import` decides. Refusing it at parse time would make our own exporter
-    # produce files we cannot read.
+    # Deferred: a file exported with --no-ancestors may name parents it does not contain.
     position = {s["id"]: i for i, s in enumerate(sessions)}
     for index, session in enumerate(sessions):
         parent = session["parent_session_id"]
@@ -342,8 +301,7 @@ def parse_document(lines: Iterable[str], path: str | None = None) -> Document:
 # -- field checks --------------------------------------------------------------
 
 
-#: Builds the error for the line being parsed, so the checks below do not each
-#: have to carry the line number and path around.
+#: Builds the error for the line being parsed.
 _Bad = Callable[[str], ExportFormatError]
 
 
@@ -361,13 +319,10 @@ def _check_type(
         if optional:
             return
         raise bad(f"{field} must not be null")
-    # A bool is an int to Python, and `True` where a step_number belongs is a
-    # malformed file rather than step 1.
+    # A bool is an int to Python; reject it as a step_number.
     if expected is int and isinstance(value, bool):
         raise bad(f"{field} must be an int, got a bool")
-    # JSON has one number type, so an integral float here is the same value
-    # written without a decimal point - accept it rather than refuse a file
-    # over its own round trip.
+    # JSON has one number type, so accept an integral float.
     if expected is float and isinstance(value, int) and not isinstance(value, bool):
         obj[field] = float(value)
         return

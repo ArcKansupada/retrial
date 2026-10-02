@@ -25,8 +25,7 @@ def test_cost_of_a_known_model():
 
 
 def test_cache_tokens_are_priced_at_their_own_rates():
-    """Cache reads are ~0.1x and writes ~1.25x. Ignoring them would misprice
-    every cached agent, which is most of them."""
+    """Cache reads are ~0.1x and writes ~1.25x, and must be priced."""
     read = cost_of(
         response("claude-opus-4-8", cache_read_input_tokens=1_000_000, output_tokens=0)
     )
@@ -180,8 +179,7 @@ def test_tool_calls_have_no_cost(store, agent, corpus):
 
 
 def test_recorded_runs_excludes_forks_and_probes(store, agent, corpus):
-    """Otherwise every bisect probe becomes a test case, and the suite grows
-    every time you use the tool."""
+    """Otherwise every bisect probe becomes a test case."""
     from retrial import fork
 
     step = next(s for s in store.steps_for(corpus[0]) if s["step_type"] == "tool_call")
@@ -219,11 +217,7 @@ def test_rerun_detects_a_fix(store, agent, corpus):
 
 
 def test_resuming_at_last_costs_about_one_model_call_per_case(store, agent, corpus):
-    """The whole economic argument: pinned history, one decision re-tested.
-
-    A 2-model-call trajectory re-executes 1 call, and the saving grows with
-    trajectory length.
-    """
+    """Pinned history, one decision re-tested: a 2-call trajectory re-executes 1 call."""
     result = rerun(store, CHECK, agent=agent, where="last", agent_args=DEPS)
     assert result["model_calls"] == 3  # one per case
     assert all(r["model_calls"] == 1 for r in result["results"])
@@ -263,11 +257,9 @@ def test_rerun_rejects_a_bad_from_value(store, agent, corpus):
 
 
 def test_a_trace_recorded_before_cost_tracking_is_still_priced():
-    """Old traces must not be stranded as 'unpriced' forever.
+    """Old traces must not be stranded as 'unpriced'.
 
-    A step recorded before cost tracking existed has cost_usd=None, but its
-    response still carries model and usage, so the figure is recoverable
-    exactly rather than estimated.
+    A step with cost_usd=None still carries model and usage, so the cost is recoverable.
     """
     from retrial.pricing import cost_of_step
 
@@ -303,8 +295,7 @@ def test_tool_steps_are_never_priced():
 
 
 def two_tool_call_model(messages, tools=None):
-    """search -> decide -> confirm. The BUDGET decision lives at `search`;
-    `confirm` only reports what was decided."""
+    """search -> decide -> confirm. The budget decision lives at `search`."""
     last = messages[-1]
     if isinstance(last["content"], str):
         return _t("tool_use", [{"type": "tool_use", "id": "toolu_s", "name": "search",
@@ -348,12 +339,8 @@ def two_tool_corpus(store, agent):
 
 
 def test_resuming_at_last_misses_a_regression_it_should_catch(store, agent, two_tool_corpus):
-    """The trap, pinned down.
-
-    `--from last` resumes at `confirm`, by which point the booking has already
-    happened and its code sits in the replayed history. The model reports it,
-    and the suite says "still passing" for a config that would never have
-    booked at all - which is why `first` is the default.
+    """The trap: `--from last` resumes after the booking already happened, so the suite says "still
+    passing". That is why `first` is the default.
     """
     LIMIT["value"] = 100  # the config change: $450 is now too expensive
 

@@ -20,9 +20,7 @@ from .fork import fork
 from .patch import apply_patch
 from .pricing import FREE, cost_of, register_prices, trajectory_cost
 
-# Adapters make retrial work with any provider, and any local model behind an
-# OpenAI-compatible server. Importing this pulls in no SDK: each adapter
-# imports its own lazily, so the install stays one dependency wide.
+# Provider adapters. Each imports its SDK lazily, so none is a hard dependency.
 from .providers import ModelResponse, gemini_adapter, openai_adapter, tool_result, tool_uses
 from .record import record
 from .regress import rerun
@@ -30,9 +28,7 @@ from .storage import Store
 from .trajectory import trajectory
 from .transfer import export, import_
 
-# The shapes every function above returns. Re-exported so annotating your own
-# code never means importing from a private-looking submodule. See
-# retrial/types.py, and CHANGELOG.md for what "stable" means before 1.0.
+# The shapes the functions above return, re-exported for annotations. See types.py.
 from .types import (
     JSON,
     AblateProbe,

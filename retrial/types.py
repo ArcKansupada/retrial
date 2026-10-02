@@ -1,16 +1,8 @@
 """The shapes retrial hands back.
 
-Every public function returns a plain dict, and that stays true. A TypedDict
-*is* a dict at runtime, so nothing here changes behaviour - it only puts the
-key names somewhere a tool can find them, and gives a shape change one place
-to happen.
-
-`JSON = Any` means "arbitrary recorded payload". A precise recursive alias
-would be more honest about the data but would force a cast at nearly every
-read, burying the annotations that carry real information.
-
-Stability, per CHANGELOG.md: before 1.0 these shapes may GAIN keys in a minor
-release. An existing key will not silently change meaning.
+Every public function returns a plain dict; these TypedDicts name the keys. `JSON = Any` means
+an arbitrary recorded payload. Before 1.0 a shape may gain keys in a minor release; an existing
+key will not change meaning.
 """
 
 from __future__ import annotations
@@ -60,8 +52,7 @@ JSON = Any
 
 StepType = Literal["model_call", "tool_call"]
 
-#: Not a heuristic: a step is `replayed` if it lives in an ancestor session,
-#: `live` if this session executed it.
+#: `replayed` if the step lives in an ancestor session, `live` if this one executed it.
 Origin = Literal["replayed", "live"]
 
 SessionStatus = Literal["running", "complete", "failed"]
@@ -78,8 +69,7 @@ class Session(TypedDict):
     parent_session_id: str | None
     parent_sha: str | None
     forked_at_step: int | None
-    #: `None` for a root run or an unedited fork. Parsed form reaches you as
-    #: `TrajectoryEntry["edit"]`.
+    #: `None` for a root run or an unedited fork.
     edit_json: str | None
     created_at: float
     status: SessionStatus
@@ -106,8 +96,7 @@ class Step(TypedDict):
 class TrajectoryEntry(TypedDict):
     """A step as it appears in a materialized trajectory.
 
-    Deliberately not a `Step`: it carries provenance that exists only once the
-    parent chain has been walked, and drops the storage-local `id`/`created_at`.
+    Not a `Step`: it adds provenance and drops the storage-local `id`/`created_at`.
     """
 
     sha: str
@@ -137,8 +126,7 @@ class _PatchOpRequired(TypedDict):
 class PatchOp(_PatchOpRequired, total=False):
     """One patch operation; `value` is required except for `remove`.
 
-    Split in two because `typing.NotRequired` landed in 3.11 and retrial
-    supports 3.10.
+    Split in two because `typing.NotRequired` needs 3.11 and retrial supports 3.10.
     """
 
     value: JSON
@@ -146,8 +134,7 @@ class PatchOp(_PatchOpRequired, total=False):
 
 Patch = PatchOp | list[PatchOp]
 
-#: What `fork(edit=...)` accepts. A patch round-trips from the stored record; a
-#: callback does not, and says so in its provenance.
+#: What `fork(edit=...)` accepts. A patch round-trips from the record; a callback does not.
 Edit = Patch | Callable[[dict[str, Any]], dict[str, Any]] | None
 
 
@@ -162,8 +149,7 @@ class CallbackProvenance(TypedDict):
     note: str
 
 
-#: Stored on the fork's session row so `retrial log` shows WHAT changed, not
-#: just where.
+#: Stored on the fork's session row so `retrial log` shows what changed.
 EditProvenance = PatchProvenance | CallbackProvenance
 
 
@@ -171,10 +157,7 @@ EditProvenance = PatchProvenance | CallbackProvenance
 
 
 class CheckFunction(Protocol):
-    """A parsed check: does this final answer look like a good run?
-
-    Carries its source expression so results can name the check they applied.
-    """
+    """A parsed check over the final answer. Carries its source expression."""
 
     expression: str
 
@@ -188,8 +171,7 @@ Check = str | Callable[[str | None], bool]
 class Agent(Protocol):
     """A `@record`-decorated agent loop.
 
-    One structural requirement: the message history is its first positional
-    argument, which is what lets a fork seed it with edited state.
+    The message history must be its first positional argument.
     """
 
     __retrial_agent__: bool
@@ -242,9 +224,7 @@ class AblateProbe(TypedDict):
     sha: str
     step_number: int
     tools: list[str | None]
-    #: True  -> outcome changed, so possibly load-bearing (weak signal).
-    #: False -> outcome held, so not load-bearing (sound conclusion).
-    #: None  -> the probe errored and proves nothing.
+    #: True: possibly load-bearing. False: not load-bearing. None: the probe errored.
     flipped: bool | None
     cost_usd: float | None
     unpriced: int
@@ -281,9 +261,7 @@ class SweepRun(TypedDict):
 class SweepProbe(TypedDict):
     """One value's outcome, aggregated over its runs.
 
-    `session_id` and `answer` are a representative run - the first one whose
-    verdict agrees with `passed`, so the answer shown never contradicts the
-    verdict reported. `runs` has all of them.
+    `session_id` and `answer` are the first run whose verdict agrees with `passed`.
     """
 
     session_id: str | None
@@ -294,11 +272,9 @@ class SweepProbe(TypedDict):
     runs: list[SweepRun]
     #: Runs that produced an answer. Less than len(runs) if any errored.
     evaluated: int
-    #: How many of the evaluated runs the check passed. None with no check,
-    #: or when every run errored - never a 0 that means "no data".
+    #: How many evaluated runs passed. None with no check, or when every run errored.
     passes: int | None
-    #: passes / evaluated: the y-axis of a psychometric curve, and what makes
-    #: a threshold estimable rather than a single coin flip.
+    #: passes / evaluated.
     pass_rate: float | None
 
 
@@ -344,8 +320,7 @@ class _RerunOutcomeRequired(TypedDict):
 class RerunOutcome(_RerunOutcomeRequired, total=False):
     """One recorded run, re-executed against the current code.
 
-    The three optional keys are absent when the run was skipped or errored -
-    there is no fork to point at in that case.
+    The three optional keys are absent when the run was skipped or errored.
     """
 
     fork_id: str
@@ -400,8 +375,7 @@ class DiffResult(TypedDict):
     a: DiffSide
     b: DiffSide
     common_ancestor: str | None
-    #: Only the LEADING run of equal steps; a later equal block is
-    #: re-convergence, not prefix.
+    #: Only the leading run of equal steps; a later one is re-convergence.
     shared_prefix: list[TrajectoryEntry]
     divergence: Divergence | None
     blocks: list[DiffBlock]
@@ -411,28 +385,21 @@ class DiffResult(TypedDict):
 
 # -- the portable format ------------------------------------------------------
 #
-# One JSON object per line, so a file streams, appends, diffs in a PR, and
-# survives a truncated write with everything before the tear still readable.
-# `kind` discriminates the three row types. See portable.py.
+# One JSON object per line; `kind` discriminates the row types. See portable.py.
 
 
 class ExportHeader(TypedDict):
     """Line 1 of every export. Says how to read the rest."""
 
     kind: Literal["header"]
-    #: Version of this file layout. Older ones are translated forward on
-    #: import; see portable.py.
+    #: Version of this file layout. Older ones are translated forward on import.
     format: int
     #: The database SCHEMA_VERSION these rows came from.
     schema: int
-    #: Features an importer MUST understand to read this file correctly. This
-    #: is what makes forward compatibility safe rather than optimistic: an
-    #: unrecognized field NOT named here is inert and can be carried through,
-    #: while anything named here that we do not know is a refusal.
+    #: Features an importer must understand. Anything named here and unknown is a refusal.
     requires: list[str]
     exported_at: float
-    #: Producing version, for bug reports. Never used to make decisions - that
-    #: is what `format` and `requires` are for.
+    #: Producing version, for bug reports. Never used to make decisions.
     retrial: str
 
 
@@ -454,10 +421,7 @@ class ExportSession(TypedDict):
 class ExportStep(TypedDict):
     """A step row, grouped by session and ascending by step_number.
 
-    No `id`: that is a local autoincrement rowid, meaningless in another store.
-    `sha` IS carried, and survives the trip intact - it hashes `session_id`
-    among other things, and import preserves session ids precisely so that
-    a step stays quotable by the same handle on both machines.
+    No local `id`. `sha` is carried and survives the trip.
     """
 
     kind: Literal["step"]
@@ -465,17 +429,13 @@ class ExportStep(TypedDict):
     session_id: str
     step_number: int
     step_type: StepType
-    #: Parsed objects, not the stored JSON strings. Re-serializing them through
-    #: `canonical_json` on import reproduces the exact bytes the sha was
-    #: computed over, which is what makes the sha checkable rather than merely
-    #: copied.
+    #: Parsed objects, re-serialized on import so the sha can be recomputed.
     input: JSON
     output: JSON
     tokens_used: int | None
     cost_usd: float | None
     duration_ms: float | None
-    #: When it was recorded, carried so an imported trace reports when it
-    #: actually happened rather than when it arrived.
+    #: When it was recorded, not when it was imported.
     created_at: float
 
 

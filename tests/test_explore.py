@@ -1,15 +1,12 @@
 """Ablation and sweep.
 
-The scenario is built so the right answer is knowable in advance. The agent
-searches a fare, checks the budget, then books:
+The agent searches a fare, checks the budget, then books:
 
-    search_flight  -> the fare. The booking decision turns on it entirely.
+    search_flight  -> the fare; the booking decision turns on it.
     check_budget   -> advisory only; this agent ignores the verdict.
     book_flight    -> produces the confirmation the check looks for.
 
-So `check_budget` is genuinely NOT load-bearing, and ablation must say so. A
-tool that merely *ran* is not a tool that *mattered*, and separating those is
-what attribution-based blame could never do.
+So `check_budget` is not load-bearing, and ablation must say so.
 """
 
 import json
@@ -38,8 +35,7 @@ def call_model(messages, tools=None):
         return _reply("toolu_budget", "check_budget", {"amount": payload["fare"]})
 
     if latest["tool_use_id"] == "toolu_budget":
-        # Ignores the budget verdict and re-reads the fare from history. This
-        # is what makes check_budget non-load-bearing.
+        # Ignores the budget verdict and re-reads the fare, so check_budget is not load-bearing.
         fare = _fare_in(messages)
         if fare is None or fare > BUDGET:
             return _text(f"Fare of ${fare} is over budget. Not booking.")
@@ -171,8 +167,7 @@ def test_every_probe_is_a_recorded_session(store, agent, recorded):
 
 
 def test_the_default_perturbation_blanks_every_result_in_a_step(store, agent, recorded):
-    """A step with parallel tool calls must be fully ablated, not just its first
-    result - otherwise the probe silently under-perturbs."""
+    """A step with parallel tool calls must be fully ablated, not just its first result."""
     from retrial.explore import _default_perturbation
 
     step = {"output": [{"content": "a"}, {"content": "b"}, {"content": "c"}]}
@@ -225,8 +220,7 @@ def test_a_probe_that_breaks_the_agent_is_reported_not_raised(store, agent, reco
 def test_ablate_refuses_a_session_with_no_tool_calls(store, opening):
     """A run with no recorded facts has nothing to ablate.
 
-    The check must PASS here, or the baseline guard fires first and this pins
-    the wrong refusal.
+    The check must pass here, or the baseline guard fires first.
     """
 
     def no_tools(messages, tools, call_model, execute_tools):
@@ -317,8 +311,7 @@ def test_sweep_needs_values(store, agent, recorded):
 
 
 def test_sweep_defaults_to_one_sample_per_value(store, agent, recorded):
-    """The single-sample shape still reports a rate, so callers reading
-    pass_rate do not need to branch on whether sampling was asked for."""
+    """A single sample still reports a rate."""
     sha = search_sha(store, recorded)
     result = sweep(store, sha, fares(300, 900), agent=agent, check=CHECK, agent_args=DEPS)
 
@@ -330,17 +323,13 @@ def test_sweep_defaults_to_one_sample_per_value(store, agent, recorded):
 
 # --- sweep with samples ----------------------------------------------------
 #
-# A real model near a decision boundary answers differently run to run, so one
-# probe per value measures a coin flip. These tests use a stand-in whose wobble
-# is scripted rather than random, so the expected rates are exact.
+# The stand-in's wobble is scripted, so the expected rates are exact.
 
 
 def flaky(*decisions):
-    """A call_model that books or refuses per a fixed list, one entry per
-    re-execution, in order. "boom" raises, standing in for a failed probe.
+    """A call_model that books or refuses per a fixed list, one entry per re-execution.
 
-    The wobble is scripted rather than derived from the fare: what is under
-    test is how sweep aggregates repeated runs, not the agent's own rule.
+    "boom" raises, standing in for a failed probe.
     """
     verdicts = iter(decisions)
 
@@ -407,8 +396,7 @@ def test_sweep_samples_are_separate_re_executions(store, agent, recorded):
 
 
 def test_sweep_shows_an_answer_that_agrees_with_the_verdict(store, agent, recorded):
-    """The first run of each value dissents from its own majority, so a probe
-    that just kept run 0 would print a booking next to FAIL."""
+    """The first run of each value dissents, so the probe must not just show run 0."""
     sha = search_sha(store, recorded)
     result = sweep(
         store,
@@ -428,8 +416,7 @@ def test_sweep_shows_an_answer_that_agrees_with_the_verdict(store, agent, record
 
 
 def test_sweep_counts_a_tie_as_not_passing(store, agent, recorded):
-    """A tie is not a majority. Arbitrary either way, but it has to be
-    deterministic, or the boundary would move between identical runs."""
+    """A tie is not a majority, and must be deterministic."""
     sha = search_sha(store, recorded)
     result = sweep(
         store,
@@ -470,8 +457,7 @@ def test_sweep_scores_a_value_on_the_samples_that_survived(store, agent, recorde
 
 
 def test_sweep_reports_a_value_whose_every_sample_failed(store, agent, recorded):
-    """No answer at all behind this value, so no rate to report - and not a
-    0/0 that would read as 'the check failed'."""
+    """No answer behind this value, so no rate, and not a 0/0."""
     sha = search_sha(store, recorded)
     result = sweep(
         store,
@@ -519,10 +505,7 @@ def test_sweep_needs_at_least_one_sample(store, agent, recorded):
 def test_ablate_refuses_when_the_baseline_check_fails(store, agent, recorded):
     """Ablate and bisect are duals; each must refuse the other's job.
 
-    With a failing baseline every probe reports "outcome held" and gets
-    labelled NOT load-bearing - reassuring, and vacuous. A live run hit exactly
-    this when the check said 'Confirmed' but the model wrote 'Confirmation
-    code'.
+    With a failing baseline every probe would read NOT load-bearing.
     """
     with pytest.raises(RetrialError, match="no good outcome to ablate") as exc:
         ablate(

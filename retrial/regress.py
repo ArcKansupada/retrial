@@ -1,32 +1,11 @@
 """Re-execute recorded runs against your current code.
 
-Your recorded runs are already a regression suite; nobody wrote them. This
-re-runs them against whatever `--agent` resolves to *now* and reports which
-outcomes changed.
+Re-runs each recorded run against whatever `--agent` resolves to now and reports which outcomes
+changed. Where you resume decides what is tested:
 
-Which step you resume from decides what the test is worth, and no choice is
-both cheap and universally right:
-
-    --from first        the opening state. Re-runs the whole trajectory: most
-                        faithful, most expensive, and replay saves almost
-                        nothing because the prefix is one step.
-
-    --at-tool NAME      the tool call named NAME, everything before it pinned.
-                        Tests exactly the decision that follows that fact, for
-                        the cost of the steps after it. Earns its keep.
-
-    --from last         the final tool call. Cheapest, and usually VACUOUS: the
-                        consequential decisions are already baked into the
-                        replayed history and the model is only summarizing.
-
-`first` is the default because a suite that quietly tests nothing is worse than
-a slow one. Measured: a booking agent whose budget prompt tightened from $600
-to $300 reported "still passing" at `last` (the `book_flight` call), because
-the booking had already happened. Resumed at `search_flight`, where the budget
-decision lives, it caught the regression in one model call.
-
-So the economics are real but not free: you have to know which decision you are
-testing, and `--at-tool` is how you say it.
+    --from first    the whole trajectory: most faithful, most expensive (default)
+    --at-tool NAME  everything before that tool call pinned; tests the next decision
+    --from last     cheapest, usually vacuous: the decisions are already replayed
 """
 
 from __future__ import annotations
@@ -47,12 +26,7 @@ if TYPE_CHECKING:
 
 
 def recorded_runs(store: Store) -> list[str]:
-    """The root sessions that make up the corpus.
-
-    Forks are excluded: they are experiments *about* a run, not runs of their
-    own. Without this, every bisect probe and ablation becomes a test case and
-    the suite grows every time you use the tool.
-    """
+    """The root sessions that make up the corpus. Forks are excluded."""
     return [
         s["id"]
         for s in store.list_sessions()
@@ -68,8 +42,7 @@ def _resume_point(
         return None
 
     if at_tool:
-        # Resume where the decision under test happens: before it is pinned,
-        # after it is re-decided.
+        # Resume where the decision under test happens.
         matches = [
             c
             for c in candidates

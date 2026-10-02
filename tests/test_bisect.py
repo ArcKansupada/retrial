@@ -1,15 +1,11 @@
 """Bisect: localizing which step made a failure inevitable.
 
-The scenario is a transient tool failure - the realistic case where bisect has
-a non-trivial answer. The first `search_flight` call times out; later calls
-succeed. So:
+The first `search_flight` call times out; later calls succeed.
 
-    fork from step 0  -> the tool is called again, now succeeds -> recovered
-    fork from step 1  -> the timeout is replayed from the log   -> still broken
+    fork from step 0  -> the tool is called again and succeeds -> recovered
+    fork from step 1  -> the timeout is replayed              -> still broken
 
-The boundary is step 1, the tool_call that captured the timeout - findable only
-because forking re-executes for real. Replaying stored JSON could never produce
-the recovery at step 0.
+So the boundary is step 1.
 """
 
 import json
@@ -165,11 +161,7 @@ def test_bisect_localizes_the_transient_failure(store, broken_run):
 
 
 def test_bisect_probes_are_real_re_executions_recorded_as_sessions(store, broken_run):
-    """Every probe is auditable - you can `retrial log` any of them.
-
-    That matters because the binary search assumes monotonicity, which a real
-    model does not strictly guarantee. The probes are the evidence.
-    """
+    """Every probe is recorded as its own session."""
     agent, session_id, executor = broken_run
     before = len(store.list_sessions())
 
@@ -186,8 +178,7 @@ def test_bisect_probes_are_real_re_executions_recorded_as_sessions(store, broken
 
 
 def test_bisect_recovers_when_forked_from_the_start(store, broken_run):
-    """The step-0 probe must pass - otherwise the search has no boundary and
-    the whole exercise is meaningless."""
+    """The step-0 probe must pass, or there is no boundary to find."""
     agent, session_id, executor = broken_run
 
     result = bisect(
@@ -200,8 +191,7 @@ def test_bisect_recovers_when_forked_from_the_start(store, broken_run):
 
 
 def test_bisect_is_logarithmic(store, broken_run):
-    """3 candidates -> 2 probes. Each probe is a real API call in production,
-    so probe count is the cost that matters."""
+    """3 candidates -> 2 probes."""
     agent, session_id, executor = broken_run
 
     result = bisect(
@@ -213,8 +203,7 @@ def test_bisect_is_logarithmic(store, broken_run):
 
 
 def test_bisect_reports_an_inherent_failure(store, opening):
-    """A tool that always fails is not localizable to a step - the run was
-    doomed from the first one. Say so instead of blaming a step."""
+    """A tool that always fails is not localizable to a step."""
 
     def always_broken(response):
         return [

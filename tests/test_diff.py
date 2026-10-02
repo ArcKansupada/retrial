@@ -48,8 +48,7 @@ def test_a_root_trajectory_is_just_its_own_steps(store, original):
 
 
 def test_a_fork_trajectory_walks_up_the_parent_chain(store, original):
-    """The fork stores 3 steps but its trajectory is 5 - the prefix lives in
-    the parent, and a trajectory is what you actually diff over."""
+    """The fork stores 3 steps but its trajectory is 5; the prefix lives in the parent."""
     agent, session_id = original
     fork_id = make_fork(store, agent, session_id)
 
@@ -75,8 +74,7 @@ def test_the_replayed_prefix_is_the_parents_steps_verbatim(store, original):
 
 
 def test_the_forked_step_shows_what_the_fork_actually_saw(store, original):
-    """Not what the parent recorded. The substituted fact is why the
-    trajectories diverge, so hiding it would make the diff a lie."""
+    """The fork's view of the edited step, not what the parent recorded."""
     agent, session_id = original
     fork_id = make_fork(store, agent, session_id)
 
@@ -92,9 +90,7 @@ def test_the_forked_step_shows_what_the_fork_actually_saw(store, original):
 def test_a_callback_edits_effect_is_recovered_even_though_it_doesnt_round_trip(
     store, original
 ):
-    """The provenance can't replay a callback, but the fork's own first model
-    call recorded the spliced history - so we read the effect, not re-derive
-    it."""
+    """A callback's effect is read from the fork's first recorded model input."""
     agent, session_id = original
 
     def triple(step):
@@ -151,8 +147,7 @@ def test_same_step_different_output_gets_a_different_signature(store, original):
     parent_step = trajectory(store, session_id)[1]
     forked_step = trajectory(store, fork_id)[1]
 
-    # Same recorded step, same tool - but the fork saw a different result, and
-    # that is what the alignment must notice.
+    # Same step and tool, but the fork saw a different result.
     assert parent_step["sha"] == forked_step["sha"]
     assert signature(parent_step) != signature(forked_step)
 
@@ -172,11 +167,9 @@ def test_diff_finds_the_shared_prefix_and_divergence(store, original):
 
 
 def test_alignment_rediscovers_the_fork_point_on_its_own(store, original):
-    """The divergence SHA must equal parent_sha, derived from signatures alone
-    without consulting the fork's recorded provenance.
+    """The divergence SHA must equal parent_sha, derived from signatures alone.
 
-    Two independent mechanisms agreeing is what makes the diff trustworthy: if
-    they disagree, either the alignment or the splice is wrong.
+    Two independent mechanisms must agree.
     """
     agent, session_id = original
     fork_id = make_fork(store, agent, session_id)
@@ -211,8 +204,7 @@ def test_a_session_is_identical_to_itself(store, original):
 
 
 def test_two_identical_independent_runs_diff_clean(store, opening):
-    """Same inputs, deterministic model -> no divergence, despite different
-    session ids. Signatures must not fold the session id in."""
+    """Same inputs -> no divergence. Signatures must not include the session id."""
     agent = record(session_name="booking", store=store)(raw_agent)
     agent(list(opening), TOOLS, fake_model, make_executor(450))
     a = agent.last_session_id
@@ -226,8 +218,7 @@ def test_two_identical_independent_runs_diff_clean(store, opening):
 
 
 def test_independent_runs_that_differ_have_no_shared_prefix(store, opening):
-    """Different worlds from step one: the very first tool result differs, but
-    the opening model_call is identical, so the prefix is exactly one step."""
+    """The first tool result differs, so the shared prefix is exactly one step."""
     agent = record(session_name="booking", store=store)(raw_agent)
     agent(list(opening), TOOLS, fake_model, make_executor(450))
     a = agent.last_session_id

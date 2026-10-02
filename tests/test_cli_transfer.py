@@ -1,10 +1,7 @@
 """`retrial export` and `retrial import` at the command line.
 
-Two things here are not obvious from the library tests. An export is *data*,
-so it must not go through the console-degrading `echo()` that everything else
-uses - a replaced character would change a step's content and break its own
-sha. And diagnostics belong on stderr, so `retrial export s_x | gh gist
-create -` sends a file rather than a file with a note in it.
+An export is data, so it must not go through the console-degrading `echo()`, and diagnostics go
+to stderr.
 """
 
 import io
@@ -130,13 +127,7 @@ def test_no_ancestors_warns_on_stderr_not_stdout(project):
 
 
 def test_export_writes_utf8_whatever_the_console_is(monkeypatch):
-    """An export is data, not display.
-
-    `echo()` replaces characters the terminal cannot encode, which is right
-    for output and ruinous here: on a cp1252 console a model's emoji would
-    become '?', the step would no longer hash to its recorded sha, and the
-    file would be refused by its own importer.
-    """
+    """An export is data: a degraded character would break the step's sha."""
     raw = io.BytesIO()
     console = io.TextIOWrapper(raw, encoding="cp1252", errors="replace")
     monkeypatch.setattr(sys, "stdout", console)
@@ -207,12 +198,7 @@ def test_import_reads_stdin(project, tmp_path):
 
 
 def test_a_file_with_a_utf8_bom_still_imports(project, tmp_path):
-    """Windows tooling adds a BOM freely - Notepad, Out-File, a shell pipe.
-
-    A file that picked one up is still the same file, the way one that gained a
-    trailing newline is. Without utf-8-sig this failed on line 1 with a message
-    about the encoding rather than the fix.
-    """
+    """A byte-order mark added by Windows tooling must be ignored."""
     path = export_to(project, "--all")
     with open(path, "rb") as handle:
         body = handle.read()

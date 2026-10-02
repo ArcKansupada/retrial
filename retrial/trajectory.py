@@ -1,18 +1,10 @@
 """Materializing a full trajectory from root to tip.
 
-A fork session stores only the steps it actually re-executed; the prefix it
-replayed lives in its parent. That's the right storage shape - a fork is a git
-branch, not a copy - but the full path from session start to tip then has to be
-assembled by walking the parent chain.
+A fork stores only the steps it re-executed; the prefix lives in its parent, so the full path is
+assembled by walking the parent chain. Each entry is tagged:
 
-Every entry is tagged with where it came from, so nothing downstream has to
-guess which steps are replayed history and which are genuine new generation:
-
-    origin="replayed"  came from an ancestor; no model call was made for it
-    origin="live"      this session actually re-executed it
-
-One of the design doc's open questions, answered by construction rather than by
-a heuristic.
+    origin="replayed"  came from an ancestor; no model call was made
+    origin="live"      this session re-executed it
 """
 
 from __future__ import annotations
@@ -56,10 +48,7 @@ def _walk(store: Store, session_id: str, seen: set[str]) -> list[TrajectoryEntry
         entry["origin"] = "replayed"
 
     if forked_from["step_type"] == "tool_call":
-        # The fork resumed *after* this tool call, so the step is part of the
-        # replayed prefix - but the fork saw a different output for it than the
-        # parent recorded, and that difference is the whole reason the
-        # trajectories diverge. Show what the fork saw.
+        # The fork resumed after this tool call with an edited output. Show what the fork saw.
         forked_from = cast(
             TrajectoryEntry,
             dict(
@@ -71,8 +60,7 @@ def _walk(store: Store, session_id: str, seen: set[str]) -> list[TrajectoryEntry
         )
         prefix = ancestors[:cut] + [forked_from]
     else:
-        # A model_call fork re-runs *that* call with edited history, so the
-        # parent's version of it is not part of the fork's path at all.
+        # A model_call fork re-runs that call, so the parent's version is not on the path.
         prefix = ancestors[:cut]
         if own:
             own[0] = cast(
@@ -86,10 +74,7 @@ def _walk(store: Store, session_id: str, seen: set[str]) -> list[TrajectoryEntry
 def _as_seen_by(store: Store, session_id: str, forked_from: TrajectoryEntry) -> JSON:
     """Recover the tool output the fork actually resumed with.
 
-    The fork's first model call recorded its input verbatim, and that input is
-    the spliced history - so the edited value reads straight off the fork's own
-    record. That covers a callback edit too, which cannot be replayed from its
-    stored provenance: we read the effect rather than re-deriving it.
+    Read from the fork's first recorded model input, which works for callback edits too.
     """
     own = store.steps_for(session_id)
     if not own or own[0]["step_type"] != "model_call":

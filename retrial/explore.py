@@ -1,28 +1,12 @@
 """Ablation and sweep - forking many times over one axis and comparing.
 
-Both are the same move as bisect: fork, re-execute for real, evaluate a check.
+    ablate  varies the STEP   - perturb each fact in turn, see which matter
+    sweep   varies the VALUE  - substitute N values at one step, find a threshold
 
-    ablate  varies the STEP    - perturb each fact in turn, see which matter
-    sweep   varies the VALUE   - substitute N values at one step, find a threshold
+Outcomes are compared with a check, not by text, because a model rewords itself on every run.
 
-A check rather than comparing answers, because a real model rewords itself on
-every run: text equality would measure non-determinism, not causation.
-
-A check collapses the wording, but not the sampling - a model near a decision
-boundary genuinely answers differently run to run. `sweep(samples=N)` re-runs
-each value N times and reports the rate, so a threshold is a crossing of two
-rates instead of a crossing of two coin flips.
-
-The signal is asymmetric, and callers are told so:
-
-  check did NOT flip -> soundly NOT load-bearing. The answer survived without
-                        the fact. A real conclusion.
-  check DID flip     -> only POSSIBLY load-bearing. The agent may be reacting
-                        to the perturbation itself (a tool that now errors)
-                        rather than to the value it lost.
-
-So ablation rules facts out rigorously and rules them in suggestively - still
-more than attribution could claim, because this is intervention, not inference.
+The signal is asymmetric. A check that did NOT flip soundly rules the fact out. A check that DID
+flip only suggests it matters: the agent may be reacting to the perturbation itself.
 """
 
 from __future__ import annotations
@@ -56,9 +40,7 @@ from .types import (
 if TYPE_CHECKING:
     from .storage import Store
 
-# A neutral "this fact was not available" stand-in. Valid JSON, because tool
-# result content is conventionally a JSON string: an agent parsing it should
-# see a well-formed object, not a syntax error.
+# A "not available" stand-in. Valid JSON, since tool results usually are.
 UNAVAILABLE = json.dumps({"error": "data unavailable"})
 
 
@@ -70,12 +52,10 @@ def _probe(
     agent_args: Sequence[Any],
     agent_kwargs: dict[str, Any],
     name: str,
-    # Not CheckFunction: a check reaching here may be the caller's own plain
-    # callable, which carries no `.expression`. Only the parsed kind does.
+    # Not CheckFunction: a caller's plain callable has no `.expression`.
     check: Callable[[str | None], bool] | None,
 ) -> dict[str, Any]:
-    """Fork once and re-execute. A failure is an outcome, not a crash: many
-    probes run, so one error is reported alongside the rest, not raised."""
+    """Fork once and re-execute. A failure is returned as an outcome, not raised."""
     try:
         fork_id = fork(
             from_sha=sha,
@@ -104,11 +84,7 @@ def _probe(
 
 
 def _default_perturbation(step: Step) -> Patch:
-    """Blank every result this step produced.
-
-    One op per result rather than a fixed `/output/0/content`, so a step with
-    parallel tool calls is fully ablated, not just its first result.
-    """
+    """Blank every result this step produced, one op per result."""
     return [
         {"op": "replace", "path": f"/output/{i}/content", "value": UNAVAILABLE}
         for i in range(len(step["output"]))
@@ -127,9 +103,8 @@ def ablate(
 ) -> AblateResult:
     """Which recorded facts is this run's outcome load-bearing on?
 
-    Perturbs each tool_call's output in turn, re-executes, and reports whether
-    the check flipped. `perturbation` may be a patch, a callable taking the step
-    and returning a patch, or None for the default (blank the results).
+    Perturbs each tool_call's output in turn and reports whether the check flipped.
+    `perturbation` is a patch, a callable returning one, or None to blank the results.
     """
     if isinstance(check, str):
         check = parse_check(check)
@@ -137,9 +112,7 @@ def ablate(
     baseline = final_answer(trajectory(store, session_id))
     baseline_passed = check(baseline)
     if not baseline_passed:
-        # With a failing baseline every probe reports "outcome held" and gets
-        # labelled NOT load-bearing - reassuring, and vacuous: the run was
-        # broken the whole time. Bisect is the tool for that case.
+        # With a failing baseline every probe would read NOT load-bearing. Use bisect.
         raise RetrialError(
             "the check does not pass on the original run, so there is no good "
             "outcome to ablate. Ablation asks which facts a SUCCESSFUL run "
@@ -154,8 +127,7 @@ def ablate(
     baseline_cost: float | None
     baseline_cost, baseline_unpriced = trajectory_cost(baseline_trajectory)
     if baseline_unpriced:
-        # An unknown model prices as None, and summing that as zero would make
-        # every delta a lie. Report no cost at all rather than a partial one.
+        # An unknown model prices as None; report no cost rather than a partial one.
         baseline_cost = None
 
     candidates = [
@@ -203,8 +175,7 @@ def ablate(
             if probe["session_id"]
             else (None, 0)
         )
-        # What deleting this fact would do to the bill. Measured, not modelled:
-        # both figures are the real recorded cost of a real trajectory.
+        # What deleting this fact would do to the cost, from recorded costs.
         probe["cost_delta"] = (
             None
             if probe["cost_usd"] is None or baseline_cost is None
@@ -251,14 +222,9 @@ def sweep(
 ) -> SweepResult:
     """Substitute N values at one step and compare the outcomes.
 
-    Finds thresholds: at what fare does it stop booking? `check` is optional -
-    without one you get each value's answer verbatim, which is what you want
-    when reading the results rather than automating over them.
-
-    `samples` re-executes each value that many times. With one sample a
-    threshold is the crossing of two coin flips; with several it is a crossing
-    of two rates, and `pass_rate` per value is the curve a caller can fit.
-    Costs len(values) * samples real re-executions.
+    `check` is optional; without one each value's answer is returned verbatim. `samples` re-
+    executes each value that many times and reports `pass_rate`. Costs len(values) * samples re-
+    executions.
     """
     if isinstance(check, str):
         check = parse_check(check)
@@ -308,23 +274,15 @@ def sweep(
 def _aggregate(value: JSON, runs: list[SweepRun], scored: bool) -> SweepProbe:
     """Collapse one value's re-executions into a single probe.
 
-    The verdict is the MAJORITY, where bisect's `samples` requires unanimity.
-    The asymmetry is deliberate: one reproduction proves a failure is reachable
-    from a step, so bisect is right to treat it as decisive, but a sweep asks
-    where behaviour *typically* flips - a fare the agent books four times in
-    five belongs on the booking side of the boundary, not the refusing side.
-
-    A tie is not a majority, so the boundary lands on the first value where
-    passing runs actually outnumber failing ones.
+    The verdict is the majority (bisect's `samples` requires unanimity). A tie counts as not
+    passing.
     """
     answered = [r for r in runs if r["error"] is None]
     passes = sum(1 for r in answered if r["passed"]) if scored and answered else None
     pass_rate = passes / len(answered) if passes is not None else None
     passed = None if pass_rate is None else pass_rate > 0.5
 
-    # Show a run that agrees with the verdict, so a reader never sees a
-    # booking confirmation next to FAIL. Falls back to the first run when
-    # nothing was scored, or when every one of them errored.
+    # Show a run that agrees with the verdict; fall back to the first.
     representative = next(
         (r for r in answered if r["passed"] is passed),
         answered[0] if answered else runs[0],
@@ -332,8 +290,7 @@ def _aggregate(value: JSON, runs: list[SweepRun], scored: bool) -> SweepProbe:
     return {
         "session_id": representative["session_id"],
         "answer": representative["answer"],
-        # One bad sample out of five is noise, not a failed probe. Only report
-        # an error when there is no answer at all behind this value.
+        # Report an error only when no run produced an answer.
         "error": None if answered else runs[0]["error"],
         "passed": passed,
         "value": value,
@@ -345,11 +302,7 @@ def _aggregate(value: JSON, runs: list[SweepRun], scored: bool) -> SweepProbe:
 
 
 def _boundaries(probes: Sequence[SweepProbe]) -> list[SweepBoundary]:
-    """Adjacent value pairs where the check flipped - the thresholds.
-
-    Reported in the order the values were given, so a caller sweeping an
-    ordered range reads them as the crossing points.
-    """
+    """Adjacent value pairs where the check flipped, in the order the values were given."""
     out: list[SweepBoundary] = []
     for earlier, later in itertools.pairwise(probes):
         if earlier["passed"] is None or later["passed"] is None:

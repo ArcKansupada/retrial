@@ -1,13 +1,7 @@
-"""The diff engine.
+"""The diff engine: sequence alignment over step signatures.
 
-Sequence alignment over step signatures, per section 6.4. `difflib.Sequence
-Matcher` is deliberately the starting point - Needleman-Wunsch is a later
-upgrade if real trajectories turn out to need it, and there is no evidence yet.
-
-The signature folds in the step type, the tool name, and a hash of the output,
-so two steps match only if they did the same thing *and* got the same answer.
-The shared prefix then falls out as the leading run of equal signatures, and
-the divergence is the first step where the runs stop agreeing.
+A signature is the step type, tool name and a hash of the output, so two steps match only if
+they did the same thing and got the same answer.
 """
 
 from __future__ import annotations
@@ -97,8 +91,7 @@ def diff(store: Store, a_id: str, b_id: str) -> DiffResult:
         for tag, i1, i2, j1, j2 in opcodes
     ]
 
-    # Only the *leading* run of equal steps; a later equal block means the runs
-    # re-converged, which is not prefix.
+    # Only the leading run of equal steps is prefix; a later one is re-convergence.
     shared = blocks[0]["a"] if blocks and blocks[0]["tag"] == "equal" else []
     diverged = next((blk for blk in blocks if blk["tag"] != "equal"), None)
 
@@ -121,9 +114,7 @@ def _divergence(block: DiffBlock | None) -> Divergence | None:
     first_b = block["b"][0] if block["b"] else None
     anchor = first_a or first_b
     if anchor is None:
-        # difflib never emits an empty non-equal block, so this is unreachable.
-        # Stated, rather than left implicit in `(first_a or first_b)["sha"]`
-        # happening not to crash.
+        # Unreachable: difflib never emits an empty non-equal block.
         return None
     edited = next(
         (e for e in (block["b"] or []) + (block["a"] or []) if e.get("edited")), None

@@ -1,12 +1,7 @@
 """Gemini, through the google-genai SDK.
 
-The same contract as every other adapter, over a wire format that agrees with
-nobody: turns are `contents` with `parts`, the assistant is called `model`,
-and tool calls carry no id at all - see `_call_id` for why that last one
-matters.
-
-Needs `pip install 'retrial[gemini]'` and GOOGLE_API_KEY (or GEMINI_API_KEY)
-in the environment, or a `client=` you built yourself.
+Turns are `contents` with `parts`, the assistant is `model`, and tool calls carry no id (see
+`_call_id`). Needs `retrial[gemini]` and GOOGLE_API_KEY or GEMINI_API_KEY, or a `client=`.
 """
 
 from __future__ import annotations
@@ -136,11 +131,8 @@ def gemini_adapter(model: str, **kwargs: Any) -> GeminiAdapter:
 def _call_id(name: Any, index: int) -> str:
     """Give a Gemini tool call the id the canonical shape requires.
 
-    Gemini issues none, and a fork splices tool results by `tool_use_id` - so
-    leaving it empty would produce traces whose `tool_call` steps cannot be
-    forked at all. Name plus position is stable within the turn, which is all
-    the splice needs. The limitation: two calls to the *same* tool in one turn
-    are told apart by position only, because Gemini offers nothing else.
+    Gemini issues none, so name plus position is used. Two calls to the same tool in one turn
+    are told apart by position only.
     """
     return f"{name or 'call'}_{index}"
 
@@ -148,8 +140,7 @@ def _call_id(name: Any, index: int) -> str:
 def to_gemini_contents(messages: list[JSON]) -> list[JSON]:
     """Canonical history -> Gemini `contents`.
 
-    Assistant becomes `model`, and tool results become `functionResponse`
-    parts matched to their call by name - the only handle Gemini exposes.
+    Tool results become `functionResponse` parts, matched to their call by name.
     """
     out: list[JSON] = []
     for message in messages:
@@ -212,8 +203,7 @@ def to_gemini_tool(tool: JSON) -> JSON:
 def to_usage(usage: Any) -> dict[str, Any]:
     """Gemini token counts -> retrial's usage keys.
 
-    Same subtraction as the OpenAI adapter, for the same reason: the prompt
-    count includes the cached tokens, which retrial prices separately.
+    Cached tokens are subtracted from the prompt count, as retrial prices them apart.
     """
     if usage is None:
         return {}
@@ -252,11 +242,7 @@ def _as_response(content: Any) -> dict[str, Any]:
 
 
 def _get(obj: Any, field: str) -> Any:
-    """Read a field off an SDK object or a plain dict.
-
-    Both spellings are tried: the SDK exposes snake_case attributes while its
-    own `to_dict()` - and so every recorded trace - uses camelCase.
-    """
+    """Read a field off an SDK object (snake_case) or its dict form (camelCase)."""
     if obj is None:
         return None
     if isinstance(obj, dict):

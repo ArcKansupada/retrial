@@ -1,9 +1,6 @@
 """Exporting a trace so it still works where it lands.
 
-The promise is "here is my trace, fork it yourself" - so these tests care
-about what arrives, not what serializes. The load-bearing one is that a fork
-travels with its ancestors, because a fork without its parents cannot be
-diffed and has no trajectory to walk.
+The key test: a fork travels with its ancestors, or it cannot be diffed or walked.
 """
 
 import json
@@ -54,16 +51,14 @@ def read(store, *args, **kwargs):
 
 
 def test_a_fork_travels_with_its_ancestors(store, recorded):
-    """Without the parent the trace cannot be diffed or walked - the two
-    things you would send it for."""
+    """Without the parent the trace cannot be diffed or walked."""
     _, sessions, _ = read(store, [recorded["fork"]])
 
     assert [s["id"] for s in sessions] == [recorded["root"], recorded["fork"]]
 
 
 def test_ancestors_come_first(store, recorded):
-    """An ordering the format guarantees, so export produces it rather than
-    hoping created_at happens to agree."""
+    """The format guarantees this ordering, so export must produce it."""
     _, sessions, _ = read(store, [recorded["fork"]])
     position = {s["id"]: i for i, s in enumerate(sessions)}
 
@@ -84,8 +79,7 @@ def test_no_ancestors_sends_the_session_alone(store, recorded):
     _, sessions, _ = read(store, [recorded["fork"]], ancestors=False)
 
     assert [s["id"] for s in sessions] == [recorded["fork"]]
-    # The provenance is kept even though the parent is absent: it is what tells
-    # the receiving store to look for a parent it may already have.
+    # Provenance is kept even without the parent, so the receiver can look for it.
     assert sessions[0]["parent_session_id"] == recorded["root"]
 
 
@@ -140,8 +134,7 @@ def test_step_content_survives_verbatim(store, recorded):
     _, _, steps = read(store, [recorded["root"]])
     stored = store.steps_for(recorded["root"])
 
-    # strict: a length mismatch means steps went missing, which is exactly
-    # what this test is for. Without it, zip would truncate and pass.
+    # strict: a length mismatch means steps went missing.
     for row, original in zip(steps, stored, strict=True):
         assert row["sha"] == original["sha"]
         assert row["input"] == original["input"]
@@ -177,12 +170,7 @@ def test_output_is_one_json_object_per_line(store, recorded):
 
 
 def test_an_unknown_session_is_refused_before_any_output(store, recorded):
-    """Not halfway through a file the caller has already begun writing.
-
-    The raise happens on the `export()` call itself, before a generator is
-    handed back - so a caller cannot open a file, start writing, and only then
-    discover the id was wrong.
-    """
+    """A bad id raises from the `export()` call itself, before any output."""
     with pytest.raises(NotFound):
         export(store, ["s_nosuchid01"])
 

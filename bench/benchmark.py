@@ -1,8 +1,6 @@
-"""Measure what retrial actually costs and actually saves.
+"""Measure what retrial costs and saves.
 
-Every number here is measured, not modelled. Where a figure depends on an
-assumption (trajectory length, model latency), the assumption is printed next
-to it so the number can be checked rather than taken on faith.
+Every number is measured; assumptions are printed beside the figures.
 
 Run:  python bench/benchmark.py
 """
@@ -112,11 +110,7 @@ def bench_recording_overhead(steps=10, runs=30):
 
 
 def bench_fork_economics(steps=10):
-    """A fork replays its prefix for free and re-executes only the suffix.
-
-    Measured in model calls and in the tokens those calls consume, taken from
-    what was actually recorded rather than estimated.
-    """
+    """A fork replays its prefix for free and re-executes only the suffix."""
     call_model, execute_tools = make_agent_parts(steps)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -134,8 +128,7 @@ def bench_fork_economics(steps=10):
     for step in recorded:
         if step["step_type"] != "tool_call":
             continue
-        # Forking here replays every step up to and including this one; only
-        # the model calls after it are re-executed.
+        # Only the model calls after this step are re-executed.
         after = [s for s in model_calls if s["step_number"] > step["step_number"]]
         rows.append(
             {
@@ -154,11 +147,9 @@ def bench_fork_economics(steps=10):
 
 
 def bench_search(sizes=(5, 10, 25, 50, 100)):
-    """Bisect probe counts, measured by running the real search.
+    """Bisect probe counts, from running the real search.
 
-    A counter stands in for the check so we count probes without paying for
-    them: the point is the search's shape, and that is independent of what the
-    agent does.
+    A counter stands in for the check, so probes are counted without being paid for.
     """
     import math
 
@@ -191,11 +182,7 @@ def bench_search(sizes=(5, 10, 25, 50, 100)):
 
 
 def live_latency():
-    """Real per-model-call latency, if a live session was ever recorded.
-
-    Overhead as a percentage is meaningless against a scripted model that
-    returns instantly, so anchor it to a real measurement when one exists.
-    """
+    """Real per-model-call latency, if a live session was ever recorded."""
     db = pathlib.Path(".retrial/sessions.db")
     if not db.exists():
         return None

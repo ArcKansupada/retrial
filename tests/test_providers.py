@@ -1,14 +1,7 @@
-"""Provider adapters: the proof that "normalize at the edge" actually holds.
+"""Provider adapters.
 
-`test_fork_matches_counterfactual_*` are the load-bearing ones - the milestone
-assertion from `test_fork.py`, re-run with the model call replaced by a real
-adapter driving a fake SDK client. The history is built exactly as the adapter
-builds it in production, and `fork`'s splice has to patch a tool result inside
-it unaided. If those pass, every downstream command is provider-indifferent.
-
-No network and no key: the fakes answer from the request the adapter hands
-them, so `to_request` has to produce a coherent conversation or they cannot
-read it.
+`test_fork_matches_counterfactual_*` re-run the milestone assertion from `test_fork.py` through
+a real adapter driving a fake SDK client. No network and no key.
 """
 
 import json
@@ -48,9 +41,7 @@ TOOLS = [
 
 # --- fake SDK clients ------------------------------------------------------
 #
-# Each answers in its provider's own wire shape and branches on the tool
-# result - one that ignored the spliced value would make the counterfactual
-# test pass trivially.
+# Each answers in its provider's wire shape and branches on the tool result.
 
 
 class FakeOpenAI:
@@ -211,8 +202,7 @@ def run_and_fork(store, adapter, price=450, edited=999):
         },
         agent=agent,
         store=store,
-        # The world still returns the original price: only the spliced fact
-        # changed, so any later tool call runs against reality.
+        # The world still returns the original price; only the spliced fact changed.
         agent_args=(TOOLS, adapter, make_executor(price)),
     )
     return original_id, fork_id
@@ -231,9 +221,7 @@ def final_text(store, session_id):
 def test_fork_matches_counterfactual_openai(store, as_objects):
     """The milestone assertion, run through the OpenAI adapter.
 
-    Both shapes a response arrives in: the SDK's objects on a live call, plain
-    dicts from a compatible server. The adapter is all that stands between
-    that difference and the trace.
+    Covers both response shapes: SDK objects and plain dicts.
     """
     adapter = OpenAIAdapter("gpt-test", client=FakeOpenAI(as_objects), system="Book flights.")
     _, fork_id = run_and_fork(store, adapter)
@@ -268,9 +256,7 @@ def test_fork_matches_counterfactual_gemini(store):
 def test_recorded_shape_is_identical_across_providers(store):
     """A step recorded through either adapter has the same shape.
 
-    Not the same text - different fakes, different words - but the same keys
-    in the same places, which is what keeps `diff`, `cost`, and `retrial log`
-    provider-indifferent.
+    The same keys in the same places, not the same text.
     """
     openai_id, _ = run_and_fork(store, OpenAIAdapter("gpt-test", client=FakeOpenAI()))
     gemini_id, _ = run_and_fork(store, GeminiAdapter("gemini-test", client=FakeGemini()))

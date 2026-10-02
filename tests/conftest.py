@@ -1,12 +1,7 @@
 """Shared fixtures: a scripted fake model and a toy booking agent.
 
-The model is a pure function of the message history, so tests are deterministic
-and cost nothing. Crucially it *branches on the tool result* - a model that
-ignored the edit would make the fork-vs-counterfactual test pass trivially.
-
-Swap `fake_model` for a real `client.messages.create` and nothing in the
-recording or fork machinery changes; that is the point of taking the model call
-as an argument.
+The model is a pure function of the message history and branches on the tool result, so tests
+are deterministic and a fork test cannot pass trivially.
 """
 
 import json

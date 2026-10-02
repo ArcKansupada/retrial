@@ -1,16 +1,8 @@
-"""Recording an async agent, for real.
+"""Recording an async agent.
 
-`@record` used to refuse `async def` agents. Now it wraps them: the async
-wrapper *awaits* the body, so `complete`/`failed` land after the loop actually
-runs (never on an empty session), and the interception points await the real
-call so the response is recorded, not an un-awaited coroutine.
-
-The load-bearing test is the last one. fork() hands the target session to the
-decorator through a ContextVar; async concurrency is many coroutines on one
-thread, so two forks under `asyncio.gather` must not clobber each other's
-handoff and cross-record one agent's steps into the other's session. That is
-the exact bug a `threading.local` would reintroduce, and the ContextVar is why
-it can't.
+The async wrapper awaits the body and the interception points. The last test checks that
+concurrent forks under asyncio.gather each record into their own session, which the ContextVar
+handoff guarantees.
 """
 
 import asyncio
@@ -101,8 +93,7 @@ def test_an_async_agent_records_its_steps_and_completes(store, opening):
 
 
 def test_an_async_call_model_is_awaited_not_recorded_as_a_coroutine(store, opening):
-    """If the call weren't awaited, the recorded output would be a coroutine and
-    the serializer would choke; a real response here proves it was awaited."""
+    """A real response here proves the call was awaited."""
     agent = record(store=store)(async_agent)
     asyncio.run(agent(list(opening), TOOLS, async_model, make_async_executor(450)))
 
@@ -164,8 +155,7 @@ def test_fork_re_executes_an_async_agent(store, opening):
 
 
 def test_fork_from_inside_a_running_loop_refuses(store, opening):
-    """asyncio.run cannot nest, so fork refuses when a loop is already running,
-    clearly and before it creates a fork session row."""
+    """asyncio.run cannot nest, so fork refuses before creating a session row."""
     from retrial import fork
     from retrial.errors import IntegrationError
 
@@ -189,8 +179,7 @@ def test_fork_from_inside_a_running_loop_refuses(store, opening):
 
 
 def test_rerun_drives_async_agents(store, opening):
-    """The whole chain: rerun re-executes a recorded async run through fork's
-    asyncio.run boundary, from ordinary sync code."""
+    """rerun re-executes a recorded async run from ordinary sync code."""
     from retrial import rerun
 
     agent = record(store=store)(async_agent)
@@ -211,10 +200,7 @@ def test_rerun_drives_async_agents(store, opening):
 
 
 def test_concurrent_async_forks_do_not_cross_sessions(store, opening):
-    """The ContextVar proof. Each task sets the fork handoff and awaits the
-    agent; a threading.local would let the last setter win and record every
-    run into one session. With a ContextVar each task has its own copy, so each
-    of the COUNT sessions gets exactly its own run's steps."""
+    """Each task sets the fork handoff; every session must get exactly its own steps."""
     record_module = importlib.import_module("retrial.record")
     agent = record(store=store)(async_agent)
     sessions = [store.create_session(name=f"fork-{i}") for i in range(COUNT)]
@@ -224,8 +210,7 @@ def test_concurrent_async_forks_do_not_cross_sessions(store, opening):
             record_module._pending.set(
                 {"store": store, "session_id": sessions[i]}
             )
-            # Yield so every task publishes its handoff before any consumes it -
-            # the interleaving that makes a shared-state bug certain.
+            # Yield so every task publishes its handoff before any consumes it.
             await asyncio.sleep(0)
             await agent(list(opening), TOOLS, async_model, make_async_executor(450))
 
@@ -236,7 +221,6 @@ def test_concurrent_async_forks_do_not_cross_sessions(store, opening):
     for session_id in sessions:
         steps = store.steps_for(session_id)
         numbers = [s["step_number"] for s in steps]
-        # A leak shows up as one session with 6 steps and another with 0, or as
-        # non-contiguous numbering where two runs interleaved into one session.
+        # A leak shows as uneven step counts or non-contiguous numbering.
         assert numbers == list(range(len(numbers))), "steps crossed between sessions"
         assert len(steps) == 3, f"{session_id} got {len(steps)} steps, not its own 3"

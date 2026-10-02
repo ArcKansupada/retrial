@@ -1,16 +1,9 @@
-"""The replay / fork engine - the core differentiator.
+"""The replay / fork engine.
 
-Forking here re-enters the live agent loop. It does not relabel stored JSON.
-
-The mechanic rests on one observation from the milestone-0 prototype: the
-message state *after* a tool call is, by construction, the exact input to the
-*next* model call, and the recorder captured that verbatim. So a fork never
-reconstructs history from parts. It reads back the array the user's own loop
-built, patches the one recorded fact, verifies the patch landed where the
-recording says, and hands it to the user's real function.
-
-Where the patch cannot be verified this module raises instead of guessing: a
-silently-wrong replay would be worse than no replay at all.
+A fork re-enters the live agent loop. The message state after a tool call is the exact input to
+the next model call, which the recorder captured, so a fork reads that array back, patches the
+one recorded fact, verifies the patch landed, and hands it to the user's function. An
+unverifiable patch raises.
 """
 
 from __future__ import annotations
@@ -38,11 +31,7 @@ def _running_loop() -> bool:
 def _run_agent(agent: Agent, *args: Any, **kwargs: Any) -> Any:
     """Invoke the agent, awaiting it if it is async.
 
-    A sync agent is called straight through. An async agent is driven to
-    completion with asyncio.run, which owns a fresh event loop for the call. The
-    ContextVar handoff fork() set is copied into that loop's task, so the
-    re-executed run still records into the fork's session. Callers already inside
-    a running loop are refused earlier in fork(), because asyncio.run cannot nest.
+    An async agent runs under asyncio.run in a fresh loop.
     """
     if _is_async(agent):
         return asyncio.run(agent(*args, **kwargs))
@@ -66,12 +55,8 @@ def fork(
             agent=run_agent,
         )
 
-    `agent` must be the @record-decorated function from the original run, and
-    must accept the seeded message state as its first argument.
-
-    Returns the new session id. The fork is a new session row: the original is
-    never mutated, so it stays intact and comparable however many times you
-    branch off it.
+    `agent` must be the @record-decorated function from the original run and take the message
+    state as its first argument. Returns the new session id; the original is never mutated.
     """
     if agent is None:
         raise IntegrationError(
@@ -79,11 +64,7 @@ def fork(
             "means calling your loop again - there is nothing to run without it."
         )
 
-    # An async agent is re-executed via asyncio.run (see _run_agent). That needs
-    # to own the event loop, so it cannot run from inside a running one - refuse
-    # that case clearly, here, before a fork session row is created. Sync callers
-    # (the CLI, ordinary library use) have no running loop and are fine.
-    # bisect/ablate/sweep/rerun all route through fork(), so this covers them.
+    # asyncio.run cannot nest, so refuse to fork an async agent from inside a running loop.
     if _is_async(agent) and _running_loop():
         raise IntegrationError(
             "fork() cannot drive an async agent from inside a running event loop: "
@@ -116,9 +97,7 @@ def fork(
             edit=provenance,
         )
 
-        # The decorator picks this up so the re-executed run records into the
-        # fork's session with its parent provenance, instead of minting a fresh
-        # root session.
+        # The decorator reads this so the run records into the fork's session.
         token = _pending.set({"store": store, "session_id": fork_session_id})
         try:
             _run_agent(agent, seed, *agent_args, **agent_kwargs)
@@ -143,8 +122,7 @@ def _public(step: Step) -> dict[str, Any]:
 
 def _seed_messages(store: Store, step: Step, edited: dict[str, Any]) -> list[JSON]:
     if step["step_type"] == "model_call":
-        # The recorded input IS the state at this point. Nothing to splice:
-        # patch the history directly and let the model decide again.
+        # The recorded input is the state at this point: patch it directly.
         messages = edited.get("input", {}).get("messages")
         if not isinstance(messages, list):
             raise ReplayIntegrityError(
@@ -247,11 +225,7 @@ def _find_result_block(messages: list[JSON], tool_use_id: str) -> JSON:
 
 
 def _verify_verbatim(block: JSON, recorded_entry: JSON, tool_use_id: str) -> None:
-    """The recorded output must appear in the history exactly as recorded.
-
-    Otherwise the loop transformed it, and our patch would land on a different
-    value than the one the user edited.
-    """
+    """The recorded output must appear in the history exactly as recorded."""
     for key, value in recorded_entry.items():
         if key not in block:
             raise ReplayIntegrityError(

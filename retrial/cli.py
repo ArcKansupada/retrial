@@ -59,12 +59,9 @@ def _console_encoding() -> str:
 
 
 def echo(text: object = "") -> None:
-    """click.echo, but it cannot be killed by a character.
+    """click.echo that degrades a character the console cannot encode.
 
-    Everything retrial prints is downstream of model output, a real model emits
-    emoji freely, and a Windows console defaults to cp1252 - so an un-encodable
-    character in an ANSWER would take down the command reporting it. Degrading
-    one glyph beats losing the output.
+    Model output contains emoji, and a Windows console defaults to cp1252.
     """
     text = str(text)
     encoding = _console_encoding()
@@ -87,14 +84,9 @@ def warn(text: object = "") -> None:
 
 
 def write_data(lines: Iterable[str], destination: str | None) -> None:
-    """Write export lines as UTF-8, whatever the console thinks it is.
+    """Write export lines as UTF-8, whatever the console encoding.
 
-    Deliberately not `echo()`. That degrades characters the terminal cannot
-    encode, which is right for display and catastrophic here: on a cp1252
-    console a model's emoji would be replaced with '?', the step's content
-    would no longer hash to its recorded sha, and the file would be refused on
-    import - or worse, imported somewhere that skipped the check. An export is
-    data, not output.
+    Not `echo()`: a degraded character would change the step's content and its sha.
     """
     if destination is not None:
         with open(destination, "w", encoding="utf-8", newline="\n") as handle:
@@ -112,14 +104,9 @@ def write_data(lines: Iterable[str], destination: str | None) -> None:
 
 
 def read_data(source: str) -> list[str]:
-    """Read an export file as UTF-8. `-` means stdin, for a pipe.
+    """Read an export file as UTF-8. `-` means stdin.
 
-    Decoded as utf-8-sig, which strips a leading byte-order mark if one is
-    there and is plain utf-8 otherwise. Windows tooling adds a BOM freely -
-    Notepad, PowerShell redirection, a pipe through the shell - and a file that
-    picked one up is still the same file, the way one that gained a trailing
-    newline is. Without this it fails as "Unexpected UTF-8 BOM" on line 1,
-    which points at the encoding and not at the fix.
+    Decoded as utf-8-sig, so a byte-order mark added by Windows tooling is ignored.
     """
     if source == "-":
         stream = getattr(sys.stdin, "buffer", None)
@@ -134,12 +121,7 @@ def read_data(source: str) -> list[str]:
 
 
 def _glyphs() -> dict[str, str]:
-    """Tree glyphs the terminal can actually encode.
-
-    Windows consoles default to cp1252, which has no box-drawing characters -
-    printing them raises UnicodeEncodeError and takes down `retrial list`.
-    Degrade to ASCII rather than crash on the happy path.
-    """
+    """Tree glyphs the terminal can encode: ASCII where box-drawing characters are missing."""
     try:
         "└── ├── │   ".encode(_console_encoding())
     except (UnicodeEncodeError, LookupError):
@@ -150,10 +132,7 @@ def _glyphs() -> dict[str, str]:
 class RetrialGroup(click.Group):
     """Renders retrial's deliberate errors as messages, not tracebacks.
 
-    On the group rather than in main() so it applies however the CLI is entered
-    - console script, `python -m`, or a test harness invoking the group
-    directly. Handling it only in main() meant errors rendered properly for
-    users and vanished under test, which is exactly backwards.
+    On the group, so it applies however the CLI is entered.
     """
 
     def invoke(self, ctx: click.Context) -> Any:
@@ -165,9 +144,7 @@ class RetrialGroup(click.Group):
 
 
 @click.group(cls=RetrialGroup)
-# From the package, not importlib.metadata: a source checkout that was never
-# pip-installed still has to answer `--version`, and that checkout is exactly
-# where a bug report comes from.
+# From the package, not importlib.metadata, so a source checkout answers `--version`.
 @click.version_option(__version__, "-V", "--version", prog_name="retrial")
 @click.option(
     "--db",
@@ -181,9 +158,7 @@ class RetrialGroup(click.Group):
 def cli(ctx: click.Context, db: str | None) -> None:
     """retrial - git for agent trajectories."""
     ctx.ensure_object(dict)
-    # Both are kept: `init` creates a store *here* and must not be redirected
-    # to a discovered one, the way `git init` always makes a repo in the
-    # current directory while every other command searches upward.
+    # Both are kept: `init` creates a store here; every other command searches upward.
     ctx.obj["db_flag"] = db
     ctx.obj["db"] = db or resolve_db_path()
 
@@ -197,9 +172,7 @@ def init(ctx: click.Context) -> None:
     Example:
       retrial init
     """
-    # Deliberately not ctx.obj["db"]: that searches upward, so `init` inside a
-    # project that already has a store would reopen the parent's and report
-    # success without creating anything here.
+    # Not ctx.obj["db"], which searches upward and would reopen a parent's store.
     path = ctx.obj["db_flag"] or default_db_path()
     existed = os.path.exists(path)
     shadowed = None if existed else find_db_path()
@@ -212,9 +185,7 @@ def init(ctx: click.Context) -> None:
 
     echo(f"Initialized empty retrial store: {path}")
     if shadowed:
-        # Legal, but almost never what someone means, and the symptom - "my
-        # sessions vanished" - points nowhere near the cause. Say it here,
-        # where it is still cheap.
+        # Legal, but rarely intended. Warn here.
         echo(
             f"note: a store already exists above this directory at {shadowed}\n"
             "      commands run here will now use the new one. Delete this "
@@ -271,9 +242,7 @@ def list_sessions(ctx: click.Context) -> None:
 def _session_line(store: Store, session: Session) -> str:
     own = len(store.steps_for(session["id"]))
     if session["parent_session_id"]:
-        # A fork's own steps are only its re-executed suffix, so reporting that
-        # alone understates the trajectory - which is what you diff and bisect
-        # over. Report both.
+        # A fork's own steps are only its re-executed suffix. Report both counts.
         total = len(trajectory(store, session["id"]))
         count = f"{total} steps, {own} new"
     else:
@@ -356,9 +325,7 @@ def _summarize(step: Step | TrajectoryEntry) -> str:
         out = step["output"]
         stop = out.get("stop_reason") if isinstance(out, dict) else None
         content = out.get("content") if isinstance(out, dict) else None
-        # str(), because a content block is model output and need not carry a
-        # 'type'; a None here would take down `retrial log` inside str.join -
-        # the same failure shape as the encoding bug.
+        # str(), because a content block need not carry a 'type'.
         kinds = (
             [str(b.get("type", "?")) for b in content if isinstance(b, dict)]
             if isinstance(content, list)
@@ -444,8 +411,7 @@ def export(
             None if everything else list(session_ids),
             ancestors=not no_ancestors,
         )
-        # Diagnostics on stderr, so `retrial export s_x | gh gist create -`
-        # sends a file and not a file with a warning in it.
+        # Diagnostics go to stderr, so a piped export is only the file.
         if no_ancestors:
             warn(
                 "note: --no-ancestors, so any parent is named but not included. "
@@ -709,8 +675,7 @@ def _render_bisect(result: BisectResult) -> None:
     )
 
     culprit = result["culprit"]
-    # bisect sets `unreproducible` to exactly `culprit is None`; saying so here
-    # makes the invariant checkable instead of merely true.
+    # bisect sets `unreproducible` to exactly `culprit is None`.
     if result["unreproducible"] or culprit is None:
         echo(
             "\nNo culprit: the agent recovered from every step probed, even "
@@ -894,9 +859,7 @@ def _render_sweep(result: SweepResult) -> None:
             f"{json.dumps(before['value'])[:40]} and {json.dumps(after['value'])[:40]}"
         )
         if result["samples"] > 1:
-            # The rates on either side say how sharp the crossing is. Flipping
-            # 5/5 -> 0/5 is a decision; 3/5 -> 2/5 is the agent being unsure
-            # twice, and reading it as a threshold would be over-reading.
+            # The rates either side show how sharp the crossing is.
             echo(
                 f"  pass rate {_rate(before)} -> {_rate(after)} "
                 f"over {result['samples']} samples per value"
@@ -1061,8 +1024,7 @@ def _load_agent(spec: str) -> Agent:
 
 
 def main() -> None:
-    # RetrialError is handled by RetrialGroup, so it renders identically here
-    # and under every other entry point.
+    # RetrialError is handled by RetrialGroup.
     cli(obj={})
 
 

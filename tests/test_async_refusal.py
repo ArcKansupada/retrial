@@ -1,11 +1,6 @@
 """A synchronous agent still refuses an async interception point.
 
-Async *agents* are recorded now - see test_async_recorder.py. But a *sync*
-agent handed an async `call_model` or `execute_tools` is still refused: a sync
-loop never awaits, so what would get recorded is an un-awaited coroutine, not
-the model's response, and the session would be stamped over work that never
-ran. That is the old silent-corruption shape, so it is named at the call
-boundary rather than left to surface from the serializer.
+A sync loop never awaits, so it would record an un-awaited coroutine.
 """
 
 import asyncio
@@ -57,8 +52,7 @@ def test_refusing_an_async_call_model_leaves_no_session_behind(store, opening):
 
 
 def test_an_async_callable_object_is_refused_too(store, opening):
-    """`async def __call__` is a shape real SDK clients ship, and such an object
-    is not a coroutine function - only its `__call__` is."""
+    """An object with `async def __call__` is not itself a coroutine function."""
 
     class AsyncClient:
         async def __call__(self, messages, tools):
@@ -82,8 +76,7 @@ def test_a_sync_agent_is_unaffected(store, opening):
 
 
 def test_the_wrapper_never_returns_a_coroutine(store, opening):
-    """The property the refusal protects, stated directly. If it fails, a
-    session is being marked complete before the work it describes happened."""
+    """A session must not be marked complete before its work happened."""
     agent = record(session_name="sync-agent", store=store)(raw_agent)
     result = agent(opening, TOOLS, fake_model, make_executor(450))
     assert not asyncio.iscoroutine(result)

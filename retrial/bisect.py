@@ -1,27 +1,11 @@
-"""Bisect - automatically localize which step made a failure inevitable.
+"""Bisect - find the earliest step from which the agent can no longer recover.
 
-Since a fork is real re-execution, this needs no new primitives: fork from a
-step with no edit, let the agent re-decide from there, and see whether it still
-lands badly. Binary search does the rest.
+Forking from step N replays steps 0..N and re-runs the rest; binary search over N finds the
+boundary. `check` describes a GOOD run.
 
-Forking from step N replays steps 0..N and re-runs everything after, so as N
-grows more of the original (bad) trajectory is baked in. Bisect finds the
-boundary: the earliest step from which the agent can no longer recover.
-
-`check` describes what a GOOD run looks like, the way a test does. A probe that
-satisfies it recovered; one that doesn't reproduced the failure.
-
-The honest caveat
------------------
-Binary search assumes monotonicity - that a failure reproducing at step N also
-reproduces at every later step. Replay is exact, so the prefix adds no noise,
-but the re-executed suffix is a real model and genuinely non-deterministic: a
-step near the boundary may recover on one run and not the next, so a single
-probe per step can land a step or two off.
-
-Not papered over - every probe is recorded as its own session, so the result is
-auditable rather than a bare answer to trust, and `samples` re-probes each
-candidate and requires unanimity, trading API calls for confidence.
+Binary search assumes a failure at step N also reproduces at every later step. The re-executed
+suffix is a real model, so a probe near the boundary can land a step off; `samples` re-probes
+each candidate and requires unanimity.
 """
 
 from __future__ import annotations
@@ -64,9 +48,6 @@ def parse_check(expression: str) -> CheckFunction:
         output contains 'confirmed'
         output not contains 'error'
         output matches '\\$[0-9]+'
-
-    A predicate is data the CLI can accept; a callable is the escape hatch for
-    anything this doesn't express - same split as the fork edit API.
     """
     match = _CHECK.match(expression)
     if not match:
@@ -96,26 +77,20 @@ def parse_check(expression: str) -> CheckFunction:
     def check(answer: str | None) -> bool:
         return not test(answer) if negate else test(answer)
 
-    # A plain function has no `expression` statically; CheckFunction is the
-    # protocol that says the returned object does.
+    # CheckFunction is the protocol that gives the returned function `.expression`.
     check.expression = expression  # type: ignore[attr-defined]
     return cast(CheckFunction, check)
 
 
 def describe_check(check: Callable[..., Any]) -> str:
-    """How a result names the check it applied.
-
-    A parsed check reports its expression, a user's callable its name; neither
-    should ever surface as `<function check at 0x7f...>`.
-    """
+    """How a result names its check: the expression, or a callable's name."""
     return str(getattr(check, "expression", getattr(check, "__name__", "<callable>")))
 
 
 def forkable_steps(store: Store, session_id: str) -> list[Step]:
-    """Steps we can honestly resume from.
+    """Steps a fork can resume from.
 
-    A trailing tool_call is excluded: the state after it was never observed, so
-    there is nothing to replay. See fork.py.
+    A trailing tool_call is excluded: the state after it was never observed.
     """
     steps = store.steps_for(session_id)
     if steps and steps[-1]["step_type"] == "tool_call":
@@ -135,8 +110,7 @@ def bisect(
 ) -> BisectResult:
     """Find the earliest step from which the agent can no longer recover.
 
-    Returns a result dict with the culprit step, every probe that was run, and
-    the number of re-executions it cost.
+    Returns the culprit step, every probe run, and the number of re-executions.
     """
     if isinstance(check, str):
         check = parse_check(check)

@@ -20,11 +20,7 @@ def test_records_the_whole_loop_with_a_sha_per_step(store, opening):
 
 
 def test_model_call_input_is_the_history_verbatim_at_call_time(store, opening):
-    """The snapshot must freeze the history as it was, not as it ended up.
-
-    The fork mechanic reads these snapshots back, so one that aliased the live
-    list would replay the *final* state at every step.
-    """
+    """The snapshot must freeze the history as it was, not alias the live list."""
     agent = record(session_name="booking", store=store)(raw_agent)
     agent(opening, TOOLS, fake_model, make_executor(450))
 
@@ -33,8 +29,7 @@ def test_model_call_input_is_the_history_verbatim_at_call_time(store, opening):
 
     assert len(first["input"]["messages"]) == 1
     assert first["input"]["messages"][0]["content"] == "Book me AUS to SFO."
-    # By the second model call the loop has appended the assistant turn and the
-    # tool result - and the snapshot shows that, not the final history.
+    # By the second model call the snapshot shows the assistant turn and tool result.
     assert len(second["input"]["messages"]) == 3
     assert second["input"]["messages"][-1]["content"][0]["type"] == "tool_result"
 
@@ -144,11 +139,9 @@ def test_custom_argument_names_are_supported(store, opening):
 
 
 def test_a_non_callable_interception_point_fails_at_the_boundary(store, opening):
-    """@record wraps call_model/execute_tools BEFORE the body runs.
+    """@record wraps call_model/execute_tools before the body runs.
 
-    So a `None` sentinel meant to be swapped out inside the body gets wrapped
-    instead and dies as "'NoneType' object is not callable" several frames deep
-    in retrial. A live agent hit exactly that. Fail where the mistake is.
+    So a `None` sentinel must be refused at the boundary.
     """
     agent = record(session_name="booking", store=store)(raw_agent)
 
@@ -160,12 +153,7 @@ def test_a_non_callable_interception_point_fails_at_the_boundary(store, opening)
 
 
 def test_a_rejected_call_does_not_strand_an_empty_session(store, opening):
-    """Validation must happen before the store is touched.
-
-    A live fork crashed on a non-callable model arg and left an orphaned
-    session row behind, which then showed up in `retrial list` and got picked
-    up by a diff.
-    """
+    """Validation must happen before the store is touched, leaving no orphaned session."""
     agent = record(session_name="booking", store=store)(raw_agent)
     with pytest.raises(IntegrationError):
         agent(opening, TOOLS, None, make_executor(450))

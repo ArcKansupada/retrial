@@ -1,10 +1,7 @@
-"""The export file format, on its own - no store involved.
+"""The export file format on its own, with no store involved.
 
-That separation is the point of portable.py: "is this file well formed?" has
-an answer that does not need a database. These tests hold the two ordering
-guarantees an importer is allowed to rely on (header first, sessions before
-the steps and forks that reference them) and the field checks that keep a
-malformed row from flowing into storage and surfacing later as something else.
+Covers the two ordering guarantees (header first, sessions before what references them) and the
+field checks.
 """
 
 import json
@@ -171,9 +168,7 @@ def test_a_parent_defined_after_its_fork_is_refused():
 
 
 def test_a_parent_absent_from_the_file_is_allowed():
-    """`--no-ancestors` produces exactly this, and the store may already hold
-    the parent. Whether it does is import's question, not the format's - and
-    refusing here would mean our own exporter writes files we cannot read."""
+    """`--no-ancestors` produces this; whether the parent exists is import's question."""
     header, sessions, steps = parse_document(
         document(a_session("s_fork00002", parent="s_root00001"))
     )
@@ -191,8 +186,7 @@ def test_a_step_for_an_undeclared_session_is_refused():
 
 
 def test_step_numbers_must_advance():
-    # Distinct shas, or the duplicate-sha check below fires first and this
-    # would be testing the wrong guard.
+    # Distinct shas, or the duplicate-sha check fires first.
     with pytest.raises(ExportFormatError, match="does not advance"):
         parse_document(
             document(
@@ -202,8 +196,7 @@ def test_step_numbers_must_advance():
 
 
 def test_a_repeated_step_is_refused():
-    """A sha covers session, step number and content, so two rows sharing one
-    are the same step written twice - with no honest way to pick a copy."""
+    """Two rows sharing a sha are the same step written twice."""
     with pytest.raises(ExportFormatError, match="appears twice"):
         parse_document(document(a_session(), a_step(number=0), a_step(number=0)))
 

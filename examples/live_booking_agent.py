@@ -1,21 +1,9 @@
 """The same booking agent, against the real Claude API.
 
-The live twin of `booking_agent.py`: the loop, the @record contract, and the
-fork/diff/bisect commands are identical, and only `call_model` differs.
+Only `call_model` differs from `booking_agent.py`. It exercises what a scripted model cannot:
+real Pydantic responses, real tool_use ids, thinking blocks, and non-determinism.
 
-It exercises the paths a scripted model can never reach:
-
-  * `serialize.to_jsonable` against real Pydantic `Message` objects
-  * real `tool_use` / `tool_result` blocks carrying the `tool_use_id` that
-    fork.py's splice matches on
-  * adaptive thinking blocks surviving a round-trip through retrial's JSON
-  * genuine non-determinism - two forks from one SHA can differ, which a
-    deterministic stand-in cannot demonstrate
-
-Needs credentials. Either export ANTHROPIC_API_KEY, or put it in a .env file
-at the repo root (gitignored):
-
-    ANTHROPIC_API_KEY=sk-ant-...
+Needs ANTHROPIC_API_KEY, exported or in a .env file at the repo root.
 
 Run:  python examples/live_booking_agent.py
 """
@@ -88,8 +76,7 @@ def make_client():
 def make_call_model(client, effort="low"):
     """The one line that differs from the scripted example.
 
-    `effort` is low by default because this validates plumbing, not the model's
-    intelligence - the task is a two-tool lookup. Raise it to watch it reason.
+    `effort` is low by default: this checks plumbing, not reasoning.
     """
 
     def call_model(messages, tools):
@@ -112,11 +99,7 @@ _lazy_client = None
 def call_model(messages, tools):
     """The default model call, used when the CLI invokes this agent.
 
-    It must be a real callable at import time - @record wraps the argument
-    before the body runs, so a `None` sentinel swapped out inside the body
-    would get wrapped instead and blow up on first use. But building a client
-    at import would demand credentials just to run `--help`. So: a real
-    function that builds its client on first call.
+    A real function that builds its client on first call, so importing needs no credentials.
     """
     global _lazy_client
     if _lazy_client is None:
@@ -156,15 +139,10 @@ def _run(name, args):
 
 @record(session_name="live-booking")
 def run_agent(messages, tools=TOOLS, call_model=call_model, execute_tools=execute_tools):
-    """Identical in shape to the scripted example's loop.
-
-    The defaults let `retrial fork --agent examples.live_booking_agent:
-    run_agent` call this with only the seeded history.
-    """
+    """Identical in shape to the scripted example's loop."""
     while True:
         response = call_model(messages, tools)
-        # Append the FULL content list: thinking blocks and their signatures
-        # must be echoed back unchanged, so nothing may be filtered here.
+        # Append the full content list: thinking blocks must be echoed back unchanged.
         messages.append({"role": "assistant", "content": _content(response)})
         if _get(response, "stop_reason") != "tool_use":
             return response
@@ -189,8 +167,7 @@ if __name__ == "__main__":
         [{"role": "user", "content": "Book me a flight from AUS to SFO."}],
         call_model=make_call_model(client),
     )
-    # Not `print`: a real model answers with emoji, which a bare print dies on
-    # under a cp1252 console. echo() degrades the glyph instead of the run.
+    # Not `print`: echo() degrades a character a cp1252 console cannot encode.
     echo(final_text(result))
     echo(f"\nRecorded session {run_agent.last_session_id}")
     echo(f"  retrial log {run_agent.last_session_id}")

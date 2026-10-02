@@ -1,13 +1,7 @@
 """Deciding what an import would do, before anything is written.
 
-`validate` produces a plan and refuses whenever the file and the store
-disagree about something they both claim to know. Nothing here writes, which
-is the point: a file that fails on its last line must leave the store exactly
-as it was.
-
-The refusals matter more than the successes. Silently reconciling two
-different runs under one id would produce a trace that reads as valid and
-describes something that never happened.
+`validate` produces a plan and refuses whenever the file and the store disagree. Nothing here
+writes.
 """
 
 import json
@@ -94,8 +88,7 @@ def test_re_importing_the_same_file_plans_nothing(source, empty):
 
 
 def test_an_overlapping_file_plans_only_what_is_new(source, empty):
-    """The main flow: you export a root, someone forks it and sends back a
-    file containing your original plus their fork."""
+    """The main flow: your exported root comes back alongside someone's fork of it."""
     _apply(empty, validate(empty, doc(lines_of(source, [source["root"]]))),
            source["store"])
 
@@ -106,8 +99,7 @@ def test_an_overlapping_file_plans_only_what_is_new(source, empty):
 
 
 def _apply(store, plan, origin):
-    """A stand-in for step 4's writer, so these tests can set up a second
-    import without waiting for it."""
+    """A stand-in for the writer, so these tests can set up a second import."""
     for session in plan.new_sessions:
         store.conn.execute(
             "INSERT INTO sessions (id, name, parent_session_id, parent_sha, "
@@ -139,8 +131,7 @@ def _apply(store, plan, origin):
 
 
 def test_a_step_whose_content_was_altered_is_refused(source, empty):
-    """The sha is recomputed, not trusted. A trace that changed in transit is
-    not a recording - which is the whole premise of the project."""
+    """The sha is recomputed, not trusted."""
     lines = lines_of(source)
     step_index = next(
         i for i, line in enumerate(lines) if json.loads(line)["kind"] == "step"
@@ -166,8 +157,7 @@ def test_the_altered_step_is_named_by_line(source, empty):
 def test_an_altered_step_number_is_caught_by_the_sha(source, empty):
     """step_number is inside the hash, so renumbering is tamper too.
 
-    The last step, and upward: renumbering anything else trips the parse-time
-    ordering rule first, which would leave this testing the wrong layer.
+    Uses the last step: renumbering another trips the parse-time ordering rule first.
     """
     lines = lines_of(source)
     last_step = max(
@@ -189,8 +179,7 @@ def test_a_fork_whose_parent_is_nowhere_is_refused(source, empty):
 
 
 def test_a_fork_whose_parent_is_already_here_is_accepted(source, empty):
-    """The same file, into a store that does have it. This is why the format
-    allows naming an absent parent at all."""
+    """The same file, into a store that already has the parent."""
     _apply(empty, validate(empty, doc(lines_of(source, [source["root"]]))),
            source["store"])
 
@@ -233,8 +222,7 @@ def test_a_different_step_in_the_same_slot_is_refused(source, empty):
     lines = lines_of(source)
     _apply(empty, validate(empty, doc(lines)), source["store"])
 
-    # A genuine step from the fork, relabelled onto the root's slot 0, with a
-    # sha recomputed so it passes the content check and reaches the conflict.
+    # A real step from the fork, relabelled onto the root's slot 0, with a recomputed sha.
     from retrial.sha import compute_sha
 
     rows = [json.loads(line) for line in lines]
@@ -286,8 +274,7 @@ def test_a_finished_session_may_not_go_back_to_running(source, empty):
 def test_a_newer_format_declaring_nothing_required_is_read_with_a_warning(
     source, empty
 ):
-    """Translate rather than refuse: unrecognized fields that nobody declared
-    load-bearing are inert."""
+    """Unrecognized fields that nobody declared required are inert."""
     lines = edited(lines_of(source), 0, format=99)
     plan = validate(empty, doc(lines))
 
@@ -311,8 +298,7 @@ def test_that_refusal_says_how_to_fix_it(source, empty):
 
 
 def test_an_older_format_with_no_translator_is_refused_as_a_bug(source, empty):
-    """Every format retrial has shipped should be readable. If one is not,
-    that is a bug and the message says so rather than blaming the file."""
+    """Every format retrial has shipped should be readable."""
     lines = edited(lines_of(source), 0, format=0)
 
     with pytest.raises(ExportFormatError, match="this is a bug"):
@@ -320,8 +306,7 @@ def test_an_older_format_with_no_translator_is_refused_as_a_bug(source, empty):
 
 
 def test_a_newer_schema_is_refused(source, empty):
-    """Rows from a schema this store cannot hold. Same rule the database
-    applies to itself."""
+    """Rows from a schema this store cannot hold."""
     lines = edited(lines_of(source), 0, schema=99)
 
     with pytest.raises(SchemaVersionError, match="newer retrial"):

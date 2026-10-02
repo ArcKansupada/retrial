@@ -1,8 +1,6 @@
-"""The tests that matter: forking is real re-execution, or the thesis is wrong.
+"""Forking is real re-execution.
 
-`test_fork_matches_counterfactual` is the milestone-0 assertion promoted from a
-throwaway script to a permanent regression test. If it fails, retrial is back
-to being a log viewer.
+`test_fork_matches_counterfactual` is the milestone-0 assertion as a regression test.
 """
 
 import json
@@ -19,8 +17,7 @@ def build_agent(store):
 
 
 def run_original(store, opening, price=450):
-    # Return the session id explicitly: `agent.last_session_id` tracks the
-    # latest recorded run, so forking through the same agent moves it.
+    # Return the session id explicitly: `agent.last_session_id` moves on each run.
     agent = build_agent(store)
     response = agent(opening, TOOLS, fake_model, make_executor(price))
     return agent, agent.last_session_id, response
@@ -46,12 +43,7 @@ def final_text(store, session_id):
 
 
 def test_fork_matches_counterfactual(store, opening):
-    """Fork == a from-scratch run in a world where the edit was always true.
-
-    The whole product in one assertion. Anything less - matching only the
-    edited value back, or the original's shape - would be satisfied by
-    relabeling stored JSON.
-    """
+    """Fork == a from-scratch run in a world where the edit was always true."""
     agent, original_id, original = run_original(store, opening)
     assert original.content[-1]["text"] == "Booked for $450."
 
@@ -61,8 +53,7 @@ def test_fork_matches_counterfactual(store, opening):
         edit=PRICE_999,
         agent=agent,
         store=store,
-        # The world still returns $450. Only the spliced fact changed, so any
-        # *later* tool call runs against reality - as a counterfactual should.
+        # The world still returns $450; only the spliced fact changed.
         agent_args=(TOOLS, fake_model, make_executor(450)),
     )
 
@@ -100,18 +91,14 @@ def test_fork_diverges_structurally_from_the_original(store, opening):
         agent_args=(TOOLS, fake_model, make_executor(450)),
     )
 
-    # check_budget was never reachable in the original - the model only calls
-    # it when the price exceeds budget, which only the edit made true.
+    # check_budget is only reachable because of the edit.
     assert tools_run_in(store, fork_id) == ["check_budget"]
 
 
 def test_a_fork_stores_only_the_re_executed_suffix(store, opening):
     """The replayed prefix is not duplicated into the fork's session.
 
-    A fork's own steps begin at the resume point; everything before stays in
-    the parent, reachable via parent_sha. Same shape as a git branch, so
-    "replay vs. genuine new generation" is answered by the storage layout
-    rather than a heuristic: every step in a fork session is real re-execution.
+    A fork's own steps begin at the resume point; the rest stay in the parent.
     """
     agent, original_id, _ = run_original(store, opening)
     step = tool_step(store, original_id)
@@ -132,8 +119,7 @@ def test_a_fork_stores_only_the_re_executed_suffix(store, opening):
     assert not any(s["sha"] in {p["sha"] for p in store.steps_for(original_id)}
                    for s in fork_steps)
 
-    # Parent prefix + fork suffix, longer than the original run because the
-    # fork took a path with an extra tool call.
+    # Parent prefix + fork suffix, longer because of the extra tool call.
     prefix_len = session["forked_at_step"] + 1
     trajectory = prefix_len + len(fork_steps)
     assert trajectory > len(store.steps_for(original_id))
@@ -242,8 +228,7 @@ def test_fork_a_model_call_reruns_the_decision(store, opening):
 
 
 def test_refuses_when_the_loop_transformed_the_tool_result(store, opening):
-    """If the recorded output isn't in the history verbatim, stop - otherwise
-    the patch lands on a value the user never saw."""
+    """If the recorded output is not in the history verbatim, refuse."""
 
     def mangling_agent(messages, tools, call_model, execute_tools):
         while True:
@@ -252,9 +237,7 @@ def test_refuses_when_the_loop_transformed_the_tool_result(store, opening):
             if response.stop_reason != "tool_use":
                 return response
             results = execute_tools(response)
-            # A trailing space: still valid JSON, so the run completes happily.
-            # That is the danger - invisible at run time, and it only matters
-            # when we try to patch this value later.
+            # A trailing space: valid JSON, but no longer the recorded value.
             rewritten = [dict(r, content=r["content"] + " ") for r in results]
             messages.append({"role": "user", "content": rewritten})
 

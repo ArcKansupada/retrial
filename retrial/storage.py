@@ -1,7 +1,6 @@
-"""SQLite storage. One local file, tree-structured from the start.
+"""SQLite storage: one local file, tree-structured.
 
-A fork is a new session row rather than a mutation, so original sessions stay
-intact and comparable no matter how many times you branch off them.
+A fork is a new session row, so original sessions are never mutated.
 """
 
 from __future__ import annotations
@@ -23,17 +22,14 @@ from .types import JSON, EditProvenance, Session, SessionStatus, Step, StepType
 DEFAULT_DIR = ".retrial"
 DB_NAME = "sessions.db"
 
-#: Points every command at one store, overriding upward search. Useful for a
-#: CI job or a shell working against a store outside the current tree.
+#: Points every command at one store, overriding upward search.
 ENV_VAR = "RETRIAL_DB"
 
-#: Bump when the tables change, and add a migration in `_migrate` for every
-#: version that has ever shipped. Stored in the file itself via
-#: `PRAGMA user_version`, so a database always states which schema wrote it.
+#: Bump when the tables change, and add a migration in `_migrate`. Stored in the file via
+#: `PRAGMA user_version`.
 #:
-#: v1: the original layout - sessions, steps, and their indexes. It was written
-#:     before the marker existed, so v0 with tables present means v1 too; see
-#:     `_apply_schema`.
+#: v1: sessions, steps and their indexes. Written before the marker existed, so v0 with tables
+#: present means v1.
 SCHEMA_VERSION = 1
 
 SCHEMA = """
@@ -72,25 +68,15 @@ CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 
 
 def default_db_path(root: str | None = None) -> str:
-    """Where a store rooted at `root` (default: cwd) lives.
+    """Where a store rooted at `root` (default: cwd) is created.
 
-    This is where a store is CREATED. For finding one that already exists, use
-    `resolve_db_path` - the two differ, the same way `git init` always makes a
-    repo here while every other git command searches upward.
+    To find an existing one, use `resolve_db_path`.
     """
     return os.path.join(root or os.getcwd(), DEFAULT_DIR, DB_NAME)
 
 
 def find_db_path(start: str | None = None) -> str | None:
-    """The nearest existing store at or above `start`, or None.
-
-    Searching upward is what makes the store belong to the *project* rather
-    than to whichever directory you happened to be standing in. Without it,
-    `retrial log` run one level down silently created a second, empty database
-    and reported no sessions - while the real trace sat untouched one directory
-    up. Recording had the same split: an agent launched from a subdirectory
-    wrote somewhere the CLI would never look.
-    """
+    """The nearest existing store at or above `start`, or None."""
     current = os.path.abspath(start or os.getcwd())
     while True:
         candidate = os.path.join(current, DEFAULT_DIR, DB_NAME)
@@ -105,13 +91,10 @@ def find_db_path(start: str | None = None) -> str | None:
 def resolve_db_path(start: str | None = None) -> str:
     """Which database a command should use, in precedence order.
 
-    1. `RETRIAL_DB`, for pointing a whole shell or CI job at one store.
-    2. The nearest existing store at or above `start`.
-    3. `start`/.retrial/sessions.db - create-here, which is what happens on a
-       first run and keeps behaviour unchanged when there is nothing above.
+    1. `RETRIAL_DB`. 2. The nearest existing store at or above `start`. 3.
+    `start`/.retrial/sessions.db, created here.
 
-    An explicit `--db` outranks all three; the CLI never calls this when the
-    flag was given.
+    An explicit `--db` outranks all three.
     """
     from_env = os.environ.get(ENV_VAR)
     if from_env:
@@ -125,13 +108,7 @@ def schema_version(conn: sqlite3.Connection) -> int:
 
 
 def _apply_schema(conn: sqlite3.Connection, path: str) -> None:
-    """Bring a database up to SCHEMA_VERSION, or refuse to touch it.
-
-    `CREATE TABLE IF NOT EXISTS` on its own is not version handling: it accepts
-    a file written by any other version of retrial without complaint and then
-    misbehaves later, somewhere else. The stamp turns that into one clear error
-    at the point of opening.
-    """
+    """Bring a database up to SCHEMA_VERSION, or refuse to touch it."""
     found = schema_version(conn)
     initialized = (
         conn.execute(
@@ -141,16 +118,11 @@ def _apply_schema(conn: sqlite3.Connection, path: str) -> None:
     )
 
     if found > SCHEMA_VERSION:
-        # Newer retrial wrote this. Its tables may have columns this code will
-        # never read, and writing to it could produce rows that version cannot
-        # read back. Refuse rather than corrupt someone's trace.
+        # Written by a newer retrial. Refuse rather than risk corrupting it.
         raise SchemaVersionError(path, found, SCHEMA_VERSION)
 
     if initialized and found == 0:
-        # Written by retrial 0.1.0, before the marker existed. That layout IS
-        # v1 - nothing needs rewriting, only labelling. Adopting it silently is
-        # right here and only here: the alternative is refusing every database
-        # recorded before this feature landed.
+        # Written by retrial 0.1.0, before the marker existed. That layout is v1.
         _stamp(conn, SCHEMA_VERSION)
         return
 
@@ -163,19 +135,12 @@ def _apply_schema(conn: sqlite3.Connection, path: str) -> None:
 
 
 def _migrate(conn: sqlite3.Connection, path: str, found: int) -> None:
-    """Upgrade an older database in place.
-
-    Empty by construction at v1 - there is no older shipped schema to come
-    from. It exists so the next bump has one obvious place to go, and so an
-    unmigratable version fails loudly instead of falling through to the
-    `CREATE TABLE IF NOT EXISTS` path and looking like it worked.
-    """
+    """Upgrade an older database in place. Empty at v1; the next bump goes here."""
     raise SchemaVersionError(path, found, SCHEMA_VERSION)
 
 
 def _stamp(conn: sqlite3.Connection, version: int) -> None:
-    # PRAGMA does not take bound parameters, so this is interpolated. `version`
-    # is an int constant from this module, never user input.
+    # PRAGMA takes no bound parameters. `version` is an int constant, never user input.
     conn.execute(f"PRAGMA user_version = {int(version)}")
     conn.commit()
 
@@ -183,17 +148,8 @@ def _stamp(conn: sqlite3.Connection, version: int) -> None:
 class Store:
     """A connection to one database. Safe to share between threads.
 
-    Sharing is the point: a web app recording two runs at once, or an agent
-    that fans work out to a pool, gets one store rather than one per thread.
-    sqlite3 refuses cross-thread use by default, so that pattern previously
-    failed as a raw `ProgrammingError` several frames deep - a legitimate thing
-    to do, rejected for a reason the traceback never explained.
-
-    Every method that touches the connection holds `_lock`, which is what makes
-    `check_same_thread=False` safe here. The lock spans each statement *and its
-    commit*, not just the statement: the connection carries one implicit
-    transaction, so two interleaved writers would otherwise land inside each
-    other's, and one thread's commit would decide the fate of another's rows.
+    Every method that touches the connection holds `_lock`, across each statement and its
+    commit.
     """
 
     path: str
@@ -202,45 +158,30 @@ class Store:
     def __init__(self, path: str | None = None) -> None:
         self.path = path or default_db_path()
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
-        # Reentrant: get_step() takes the lock and then calls resolve_sha(),
-        # which takes it again.
+        # Reentrant: get_step() takes the lock and then calls resolve_sha().
         self._lock = threading.RLock()
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
 
-        # Every step is committed as it happens, so a run that crashes mid-loop
-        # still has its trace - that run is the one you most want to inspect.
-        # Paying a full fsync per step for that costs ~1.4ms; WAL plus
-        # synchronous=NORMAL costs ~0.02ms and loses nothing we care about.
-        # The failure it trades away is an OS crash or power cut losing the last
-        # few commits. The failure it protects against - the agent process
-        # throwing - is unaffected, because committed data survives process
-        # death regardless. A debugger is allowed to lose its last step to a
-        # power cut; it is not allowed to lose the trace of a crash.
+        # Every step is committed as it happens, so a crashed run keeps its trace. WAL with
+        # synchronous=NORMAL makes that cheap; only an OS crash can lose the last commits.
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.execute("PRAGMA synchronous = NORMAL")
 
         try:
             _apply_schema(self.conn, self.path)
         except BaseException:
-            # A Store that failed to open must not leave its connection behind.
-            # On Windows an orphaned handle keeps the file locked, so the next
-            # attempt fails for a second, unrelated-looking reason.
+            # Close the connection if opening fails; on Windows an orphaned handle locks the
+            # file.
             self.conn.close()
             raise
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
-        """Several writes that must land together, or not at all.
+        """Several writes that land together, or not at all.
 
-        Every other method here commits its own statement, which is right for
-        recording: a run that crashes mid-loop keeps the steps it managed. An
-        import is the opposite - a file rejected on its last line must leave
-        the store exactly as it was, with no half a trace to reason about.
-
-        Holds the lock for the whole block, so a concurrent writer cannot
-        commit inside this transaction and take the rows with it.
+        Holds the lock for the whole block.
         """
         with self._lock:
             try:
@@ -329,12 +270,7 @@ class Store:
     ) -> str:
         """Append a step. `step_number=None` allocates the next one atomically.
 
-        Pass None unless you are reconstructing a specific numbering. Asking
-        for the number and then inserting it are two statements, and between
-        them another thread recording into the same session can take it - the
-        loser hits the UNIQUE(session_id, step_number) constraint. Allocating
-        inside the lock closes that window; `next_step_number` on its own
-        cannot.
+        Pass None unless reconstructing a specific numbering.
         """
         from .serialize import canonical_json
 
