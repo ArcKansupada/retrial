@@ -8,6 +8,11 @@ Both are the same move as bisect: fork, re-execute for real, evaluate a check.
 A check rather than comparing answers, because a real model rewords itself on
 every run: text equality would measure non-determinism, not causation.
 
+A check collapses the wording, but not the sampling - a model near a decision
+boundary genuinely answers differently run to run. `sweep(samples=N)` re-runs
+each value N times and reports the rate, so a threshold is a crossing of two
+rates instead of a crossing of two coin flips.
+
 The signal is asymmetric, and callers are told so:
 
   check did NOT flip -> soundly NOT load-bearing. The answer survived without
@@ -45,6 +50,7 @@ from .types import (
     SweepBoundary,
     SweepProbe,
     SweepResult,
+    SweepRun,
 )
 
 if TYPE_CHECKING:
@@ -239,6 +245,7 @@ def sweep(
     path: str = "/output/0/content",
     check: Check | None = None,
     agent_args: Sequence[Any] = (),
+    samples: int = 1,
     on_probe: Callable[[SweepProbe], None] | None = None,
     **agent_kwargs: Any,
 ) -> SweepResult:
@@ -247,28 +254,41 @@ def sweep(
     Finds thresholds: at what fare does it stop booking? `check` is optional -
     without one you get each value's answer verbatim, which is what you want
     when reading the results rather than automating over them.
+
+    `samples` re-executes each value that many times. With one sample a
+    threshold is the crossing of two coin flips; with several it is a crossing
+    of two rates, and `pass_rate` per value is the curve a caller can fit.
+    Costs len(values) * samples real re-executions.
     """
     if isinstance(check, str):
         check = parse_check(check)
     if not values:
         raise RetrialError("sweep needs at least one value")
+    if samples < 1:
+        raise RetrialError("samples must be at least 1")
 
     step = store.get_step(from_sha)
 
     probes: list[SweepProbe] = []
     for index, value in enumerate(values):
-        raw = _probe(
-            store,
-            step["sha"],
-            {"op": "replace", "path": path, "value": value},
-            agent,
-            agent_args,
-            agent_kwargs,
-            f"sweep-{index}",
-            check,
-        )
-        raw["value"] = value
-        probe = cast(SweepProbe, raw)
+        edit: Edit = {"op": "replace", "path": path, "value": value}
+        runs = [
+            cast(
+                SweepRun,
+                _probe(
+                    store,
+                    step["sha"],
+                    edit,
+                    agent,
+                    agent_args,
+                    agent_kwargs,
+                    f"sweep-{index}" if samples == 1 else f"sweep-{index}-{sample}",
+                    check,
+                ),
+            )
+            for sample in range(samples)
+        ]
+        probe = _aggregate(value, runs, scored=check is not None)
         probes.append(probe)
         if on_probe:
             on_probe(probe)
@@ -279,8 +299,48 @@ def sweep(
         "path": path,
         "check": describe_check(check) if check else None,
         "probes": probes,
-        "re_executions": len(probes),
+        "re_executions": sum(len(p["runs"]) for p in probes),
         "boundaries": _boundaries(probes) if check else [],
+        "samples": samples,
+    }
+
+
+def _aggregate(value: JSON, runs: list[SweepRun], scored: bool) -> SweepProbe:
+    """Collapse one value's re-executions into a single probe.
+
+    The verdict is the MAJORITY, where bisect's `samples` requires unanimity.
+    The asymmetry is deliberate: one reproduction proves a failure is reachable
+    from a step, so bisect is right to treat it as decisive, but a sweep asks
+    where behaviour *typically* flips - a fare the agent books four times in
+    five belongs on the booking side of the boundary, not the refusing side.
+
+    A tie is not a majority, so the boundary lands on the first value where
+    passing runs actually outnumber failing ones.
+    """
+    answered = [r for r in runs if r["error"] is None]
+    passes = sum(1 for r in answered if r["passed"]) if scored and answered else None
+    pass_rate = passes / len(answered) if passes is not None else None
+    passed = None if pass_rate is None else pass_rate > 0.5
+
+    # Show a run that agrees with the verdict, so a reader never sees a
+    # booking confirmation next to FAIL. Falls back to the first run when
+    # nothing was scored, or when every one of them errored.
+    representative = next(
+        (r for r in answered if r["passed"] is passed),
+        answered[0] if answered else runs[0],
+    )
+    return {
+        "session_id": representative["session_id"],
+        "answer": representative["answer"],
+        # One bad sample out of five is noise, not a failed probe. Only report
+        # an error when there is no answer at all behind this value.
+        "error": None if answered else runs[0]["error"],
+        "passed": passed,
+        "value": value,
+        "runs": runs,
+        "evaluated": len(answered),
+        "passes": passes,
+        "pass_rate": pass_rate,
     }
 
 

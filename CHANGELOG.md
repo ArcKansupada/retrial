@@ -10,6 +10,30 @@ existing key will not silently change meaning.
 
 ## [Unreleased]
 
+### Added
+- **`sweep(samples=N)` / `retrial sweep --samples N`.** A real model near a
+  decision boundary answers differently run to run, so a single probe per value
+  measures a coin flip rather than a threshold. `--samples` re-executes each
+  value N times and reports `passes` / `evaluated` / `pass_rate` per value, so a
+  crossing is a crossing of two rates and the rates on either side say how sharp
+  it is - `5/5 -> 0/5` is a decision, `3/5 -> 2/5` is the agent being unsure
+  twice. The verdict is the **majority**, deliberately unlike `bisect`'s
+  `samples`, which requires unanimity: one reproduction proves a failure is
+  reachable from a step, but a fare the agent books four times in five belongs
+  on the booking side of the boundary. A tie counts as not passing, so a
+  boundary never moves between identical runs. A value whose probes partly
+  errored is scored on the samples that survived; only a value with no answer at
+  all is reported as an error.
+
+### Changed
+- `SweepProbe` gains `runs`, `evaluated`, `passes`, and `pass_rate`; `SweepResult`
+  gains `samples`. Additive, per the pre-1.0 policy above. `session_id` and
+  `answer` on a probe are now the first run whose verdict agrees with `passed`,
+  so a booking confirmation is never printed next to `FAIL`; with the default
+  `samples=1` there is one run and the values are unchanged.
+- `sweep`'s `re_executions` now counts every fork (`len(values) * samples`),
+  not values.
+
 ## [0.2.0] - 2026-08-07
 
 ### Added

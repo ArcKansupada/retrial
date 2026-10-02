@@ -819,6 +819,13 @@ def _render_ablate(result: AblateResult) -> None:
     help="JSON Pointer into the step to substitute at.",
 )
 @click.option("--check", default=None, metavar="EXPR", help="Optional; finds thresholds.")
+@click.option(
+    "--samples",
+    default=1,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Re-executions per value. >1 reports a pass rate; the majority wins.",
+)
 @click.option("--agent", required=True, metavar="MODULE:FUNCTION")
 @click.pass_context
 def sweep(
@@ -827,15 +834,18 @@ def sweep(
     values_file: str,
     path: str,
     check: str | None,
+    samples: int,
     agent: str,
 ) -> None:
     """Substitute N values at one step and compare the outcomes.
 
-    Costs one real re-execution per value.
+    Costs one real re-execution per value, times --samples.
 
     \b
     Example:
       retrial sweep eec0274 --agent myapp:agent --values-file fares.json
+      retrial sweep eec0274 --agent myapp:agent --values-file fares.json \\
+          --check "output contains 'Confirmed'" --samples 5
     """
     with open(values_file) as fh:
         values = json.load(fh)
@@ -847,7 +857,8 @@ def sweep(
 
     target = _load_agent(agent)
     with _store(ctx) as store:
-        echo(f"sweeping {short(sha)} at {path} over {len(values)} value(s)\n")
+        each = f" x {samples} samples" if samples > 1 else ""
+        echo(f"sweeping {short(sha)} at {path} over {len(values)} value(s){each}\n")
 
         def report(probe: SweepProbe) -> None:
             if probe["error"]:
@@ -855,11 +866,21 @@ def sweep(
             elif probe["passed"] is None:
                 outcome = repr(probe["answer"])
             else:
-                outcome = ("PASS" if probe["passed"] else "FAIL") + f" -> {probe['answer']!r}"
+                verdict = "PASS" if probe["passed"] else "FAIL"
+                if samples > 1:
+                    verdict += f" {probe['passes']}/{probe['evaluated']}"
+                outcome = f"{verdict} -> {probe['answer']!r}"
             echo(f"  {json.dumps(probe['value'])[:44]}: {outcome}")
 
         result = sweep_session(
-            store, sha, values, agent=target, path=path, check=check, on_probe=report
+            store,
+            sha,
+            values,
+            agent=target,
+            path=path,
+            check=check,
+            samples=samples,
+            on_probe=report,
         )
         _render_sweep(result)
 
@@ -872,8 +893,20 @@ def _render_sweep(result: SweepResult) -> None:
             f"\nThreshold: the check flips between "
             f"{json.dumps(before['value'])[:40]} and {json.dumps(after['value'])[:40]}"
         )
+        if result["samples"] > 1:
+            # The rates on either side say how sharp the crossing is. Flipping
+            # 5/5 -> 0/5 is a decision; 3/5 -> 2/5 is the agent being unsure
+            # twice, and reading it as a threshold would be over-reading.
+            echo(
+                f"  pass rate {_rate(before)} -> {_rate(after)} "
+                f"over {result['samples']} samples per value"
+            )
     if result["check"] and not result["boundaries"]:
         echo("\nNo threshold: the check gave the same verdict for every value.")
+
+
+def _rate(probe: SweepProbe) -> str:
+    return f"{probe['passes']}/{probe['evaluated']}"
 
 
 @cli.command()

@@ -428,6 +428,52 @@ def test_sweep_end_to_end(env):
     assert "Threshold: the check flips between" in result.output
 
 
+def test_sweep_samples_reports_rates(env):
+    """toy_agent is deterministic, so the rates are 3/3 and 0/3 - which is what
+    makes them readable as an assertion about the rendering."""
+    run, db, tmp_path = env
+    session_id = _record_and_get(run, db, tmp_path)
+    sha = next(
+        line.split()[0] for line in run("log", session_id).output.splitlines()
+        if "tool_call" in line
+    )
+
+    values = tmp_path / "values.json"
+    values.write_text(
+        json.dumps([json.dumps({"price": p}) for p in (400, 800)]), encoding="utf-8"
+    )
+
+    result = run(
+        "sweep", sha,
+        "--values-file", str(values),
+        "--check", "output contains 'cheap'",
+        "--samples", "3",
+        "--agent", "toy_agent:run_agent",
+    )
+    assert "over 2 value(s) x 3 samples" in result.output
+    assert "PASS 3/3" in result.output
+    assert "FAIL 0/3" in result.output
+    assert "6 re-execution(s)" in result.output
+    assert "pass rate 3/3 -> 0/3" in result.output
+
+
+def test_sweep_rejects_zero_samples(env):
+    run, db, tmp_path = env
+    session_id = _record_and_get(run, db, tmp_path)
+    sha = next(
+        line.split()[0] for line in run("log", session_id).output.splitlines()
+        if "tool_call" in line
+    )
+    values = tmp_path / "values.json"
+    values.write_text(json.dumps([json.dumps({"price": 100})]), encoding="utf-8")
+
+    result = run(
+        "sweep", sha, "--values-file", str(values), "--samples", "0",
+        "--agent", "toy_agent:run_agent", expect_ok=False,
+    )
+    assert result.exit_code != 0
+
+
 def test_sweep_without_a_check_reports_answers(env):
     run, db, tmp_path = env
     session_id = _record_and_get(run, db, tmp_path)

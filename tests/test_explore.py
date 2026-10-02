@@ -316,6 +316,206 @@ def test_sweep_needs_values(store, agent, recorded):
         sweep(store, search_sha(store, recorded), [], agent=agent, agent_args=DEPS)
 
 
+def test_sweep_defaults_to_one_sample_per_value(store, agent, recorded):
+    """The single-sample shape still reports a rate, so callers reading
+    pass_rate do not need to branch on whether sampling was asked for."""
+    sha = search_sha(store, recorded)
+    result = sweep(store, sha, fares(300, 900), agent=agent, check=CHECK, agent_args=DEPS)
+
+    assert result["samples"] == 1
+    assert [p["pass_rate"] for p in result["probes"]] == [1.0, 0.0]
+    assert all(len(p["runs"]) == 1 for p in result["probes"])
+    assert all(p["evaluated"] == 1 for p in result["probes"])
+
+
+# --- sweep with samples ----------------------------------------------------
+#
+# A real model near a decision boundary answers differently run to run, so one
+# probe per value measures a coin flip. These tests use a stand-in whose wobble
+# is scripted rather than random, so the expected rates are exact.
+
+
+def flaky(*decisions):
+    """A call_model that books or refuses per a fixed list, one entry per
+    re-execution, in order. "boom" raises, standing in for a failed probe.
+
+    The wobble is scripted rather than derived from the fare: what is under
+    test is how sweep aggregates repeated runs, not the agent's own rule.
+    """
+    verdicts = iter(decisions)
+
+    def call_model(messages, tools=None):
+        last = messages[-1]
+        if isinstance(last["content"], str):
+            return _reply("toolu_search", "search_flight", {"route": "AUS-SFO"})
+
+        latest = [b for b in last["content"] if b.get("type") == "tool_result"][-1]
+        payload = json.loads(latest["content"])
+
+        if latest["tool_use_id"] == "toolu_search":
+            return _reply("toolu_budget", "check_budget", {"amount": payload["fare"]})
+
+        if latest["tool_use_id"] == "toolu_budget":
+            verdict = next(verdicts)
+            if verdict == "boom":
+                raise RuntimeError("model unavailable")
+            fare = _fare_in(messages)
+            if verdict:
+                return _reply("toolu_book", "book_flight", {"amount": fare})
+            return _text(f"Fare of ${fare} is over budget. Not booking.")
+
+        if latest["tool_use_id"] == "toolu_book":
+            return _text(f"Confirmed: booked for ${payload['amount']}.")
+
+        raise AssertionError(f"no scripted reply for {latest}")
+
+    return ([], call_model, execute_tools)
+
+
+def test_sweep_samples_each_value_and_reports_the_rate(store, agent, recorded):
+    """The headline: a threshold becomes a crossing of two rates."""
+    sha = search_sha(store, recorded)
+    result = sweep(
+        store,
+        sha,
+        fares(590, 610),
+        agent=agent,
+        check=CHECK,
+        samples=3,
+        # value 590 books 2 of 3; value 610 books 1 of 3.
+        agent_args=flaky(False, True, True, True, False, False),
+    )
+
+    assert result["samples"] == 3
+    assert result["re_executions"] == 6
+    assert [p["passes"] for p in result["probes"]] == [2, 1]
+    assert [p["pass_rate"] for p in result["probes"]] == [2 / 3, 1 / 3]
+    # Majority, not unanimity: 2-of-3 books, so 590 is on the booking side.
+    assert [p["passed"] for p in result["probes"]] == [True, False]
+    assert len(result["boundaries"]) == 1
+
+
+def test_sweep_samples_are_separate_re_executions(store, agent, recorded):
+    sha = search_sha(store, recorded)
+    result = sweep(
+        store, sha, fares(500), agent=agent, samples=3, agent_args=flaky(True, True, True)
+    )
+
+    probe = result["probes"][0]
+    assert len(probe["runs"]) == 3
+    assert len({r["session_id"] for r in probe["runs"]}) == 3
+
+
+def test_sweep_shows_an_answer_that_agrees_with_the_verdict(store, agent, recorded):
+    """The first run of each value dissents from its own majority, so a probe
+    that just kept run 0 would print a booking next to FAIL."""
+    sha = search_sha(store, recorded)
+    result = sweep(
+        store,
+        sha,
+        fares(590, 610),
+        agent=agent,
+        check=CHECK,
+        samples=3,
+        agent_args=flaky(False, True, True, True, False, False),
+    )
+
+    booked, refused = result["probes"]
+    assert booked["passed"] is True
+    assert "Confirmed" in booked["answer"]
+    assert refused["passed"] is False
+    assert "Not booking" in refused["answer"]
+
+
+def test_sweep_counts_a_tie_as_not_passing(store, agent, recorded):
+    """A tie is not a majority. Arbitrary either way, but it has to be
+    deterministic, or the boundary would move between identical runs."""
+    sha = search_sha(store, recorded)
+    result = sweep(
+        store,
+        sha,
+        fares(600),
+        agent=agent,
+        check=CHECK,
+        samples=2,
+        agent_args=flaky(True, False),
+    )
+
+    probe = result["probes"][0]
+    assert probe["pass_rate"] == 0.5
+    assert probe["passed"] is False
+
+
+def test_sweep_scores_a_value_on_the_samples_that_survived(store, agent, recorded):
+    """One failed probe out of three is noise, not a verdict about the value."""
+    sha = search_sha(store, recorded)
+    result = sweep(
+        store,
+        sha,
+        fares(500),
+        agent=agent,
+        check=CHECK,
+        samples=3,
+        agent_args=flaky("boom", True, True),
+    )
+
+    probe = result["probes"][0]
+    assert probe["evaluated"] == 2
+    assert probe["passes"] == 2
+    assert probe["pass_rate"] == 1.0
+    assert probe["passed"] is True
+    # The probe as a whole is not an error: two runs did answer.
+    assert probe["error"] is None
+    assert probe["runs"][0]["error"].startswith("RuntimeError")
+
+
+def test_sweep_reports_a_value_whose_every_sample_failed(store, agent, recorded):
+    """No answer at all behind this value, so no rate to report - and not a
+    0/0 that would read as 'the check failed'."""
+    sha = search_sha(store, recorded)
+    result = sweep(
+        store,
+        sha,
+        fares(500),
+        agent=agent,
+        check=CHECK,
+        samples=2,
+        agent_args=flaky("boom", "boom"),
+    )
+
+    probe = result["probes"][0]
+    assert probe["evaluated"] == 0
+    assert probe["passes"] is None
+    assert probe["pass_rate"] is None
+    assert probe["passed"] is None
+    assert "model unavailable" in probe["error"]
+
+
+def test_sweep_without_a_check_reports_no_rate(store, agent, recorded):
+    sha = search_sha(store, recorded)
+    result = sweep(
+        store, sha, fares(500), agent=agent, samples=2, agent_args=flaky(True, False)
+    )
+
+    probe = result["probes"][0]
+    assert probe["evaluated"] == 2
+    assert probe["passes"] is None
+    assert probe["pass_rate"] is None
+    assert probe["passed"] is None
+
+
+def test_sweep_needs_at_least_one_sample(store, agent, recorded):
+    with pytest.raises(RetrialError, match="at least 1"):
+        sweep(
+            store,
+            search_sha(store, recorded),
+            fares(500),
+            agent=agent,
+            samples=0,
+            agent_args=DEPS,
+        )
+
+
 def test_ablate_refuses_when_the_baseline_check_fails(store, agent, recorded):
     """Ablate and bisect are duals; each must refuse the other's job.
 

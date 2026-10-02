@@ -64,6 +64,7 @@ from .types import (
     SweepBoundary,
     SweepProbe,
     SweepResult,
+    SweepRun,
     TrajectoryEntry,
 )
 
@@ -130,6 +131,7 @@ __all__ = [
     "SweepBoundary",
     "SweepProbe",
     "SweepResult",
+    "SweepRun",
     "TrajectoryEntry",
     "__version__",
 ]

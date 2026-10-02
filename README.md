@@ -107,7 +107,7 @@ Same machinery — a fork plus a check — pointed at different questions:
 
 - **`bisect`** — which step doomed a *failed* run? Binary search over resume points, about log2(steps) re-executions.
 - **`ablate`** — which recorded facts did a *good* run actually need? Perturb each and see if the outcome flips. Causal, not heuristic.
-- **`sweep`** — fork one step across many values to find a decision threshold in the model's behavior.
+- **`sweep`** — fork one step across many values to find a decision threshold in the model's behavior. `--samples N` re-runs each value N times and reports a pass rate, so a threshold is a crossing of two rates rather than of two coin flips.
 - **`rerun`** — re-execute every recorded run against your current code. Your traces are the regression suite; it exits non-zero on a regression, so CI fails without extra plumbing.
 - **`cost`** — token and dollar breakdown per step. An unknown model prices as `unpriced`, never as a guess.
 
@@ -136,7 +136,7 @@ retrial fork <sha> --agent M:F --edit-file e.json
 retrial diff <a> <b>            --full to expand shared steps
 retrial bisect <session> --check EXPR --agent M:F
 retrial ablate <session> --check EXPR --agent M:F
-retrial sweep <sha> --values-file v.json --agent M:F
+retrial sweep <sha> --values-file v.json --agent M:F [--samples N]
 retrial rerun --check EXPR --agent M:F
 retrial cost <session>
 retrial export <session> > trace.jsonl

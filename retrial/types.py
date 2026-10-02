@@ -37,6 +37,7 @@ __all__ = [
     "BisectResult",
     "AblateProbe",
     "AblateResult",
+    "SweepRun",
     "SweepProbe",
     "SweepBoundary",
     "SweepResult",
@@ -268,12 +269,37 @@ class AblateResult(TypedDict):
 # -- sweep --------------------------------------------------------------------
 
 
+class SweepRun(TypedDict):
+    """One re-execution of one value. `samples > 1` produces several per value."""
+
+    session_id: str | None
+    answer: str | None
+    error: str | None
+    passed: bool | None
+
+
 class SweepProbe(TypedDict):
+    """One value's outcome, aggregated over its runs.
+
+    `session_id` and `answer` are a representative run - the first one whose
+    verdict agrees with `passed`, so the answer shown never contradicts the
+    verdict reported. `runs` has all of them.
+    """
+
     session_id: str | None
     answer: str | None
     error: str | None
     passed: bool | None
     value: JSON
+    runs: list[SweepRun]
+    #: Runs that produced an answer. Less than len(runs) if any errored.
+    evaluated: int
+    #: How many of the evaluated runs the check passed. None with no check,
+    #: or when every run errored - never a 0 that means "no data".
+    passes: int | None
+    #: passes / evaluated: the y-axis of a psychometric curve, and what makes
+    #: a threshold estimable rather than a single coin flip.
+    pass_rate: float | None
 
 
 # Functional syntax: "from" is a keyword, so the class form cannot spell it.
@@ -289,6 +315,7 @@ class SweepResult(TypedDict):
     re_executions: int
     #: Adjacent pairs where the check flipped: the decision boundary.
     boundaries: list[SweepBoundary]
+    samples: int
 
 
 # -- rerun --------------------------------------------------------------------
