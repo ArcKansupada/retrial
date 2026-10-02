@@ -10,6 +10,8 @@ existing key will not silently change meaning.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-02
+
 ### Added
 - **`sweep(samples=N)` / `retrial sweep --samples N`.** A real model near a
   decision boundary answers differently run to run, so a single probe per value
